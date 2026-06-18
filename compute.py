@@ -66,6 +66,8 @@ class Tx:
     transfer_expenses: float = 0.0
     fmv_31jan2018: Optional[float] = None   # per-unit by default (Winman col J convention)
     fmv_basis: str = "per_unit"             # "per_unit" | "total"
+    broker_gain: Optional[float] = None     # broker's OWN per-lot gain; never used to compute,
+                                            # only to validate the engine against (validate.py)
     stt_paid: bool = True
     is_50aa: bool = False
     cost_basis_meaning: str = "raw"         # "raw" | "grandfathered"
@@ -123,6 +125,8 @@ class Result:
             "net_sale_consideration": round(self.net_sale_consideration, 2),
             "cost_used": round(self.cost_used, 2),
             "gain": round(self.gain, 2),
+            "broker_gain": (round(self.tx.broker_gain, 2)
+                            if self.tx.broker_gain is not None else None),
             "flags": "; ".join(self.flags),
         }
 

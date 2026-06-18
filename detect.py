@@ -29,6 +29,7 @@ import re
 CANONICAL_FIELDS = [
     "security_name", "acquisition_date", "purchase_cost", "transfer_date",
     "sale_consideration", "quantity", "isin", "transfer_expenses", "fmv_31jan2018",
+    "broker_gain",
 ]
 REQUIRED = ["security_name", "acquisition_date", "purchase_cost", "transfer_date", "sale_consideration"]
 
@@ -74,6 +75,18 @@ SYNONYMS: dict[str, list[str]] = {
         "price as on 31st jan", "price on 31-jan-18", "fmv price on 31",
         "rate as on 31 jan 18", "fmv as on 31", "fair market value", "grandfathered nav",
         "31st jan 2018", "31-jan-2018", "31/01/2018", "31 jan 18", "as on 31",
+    ],
+    # the broker's OWN already-computed per-lot gain. Optional (not REQUIRED): it is
+    # never used to compute, only to validate the engine against (see validate.py).
+    # The distinctive tokens (gain / profit / p&l) keep it clear of the sale-amount
+    # and cost columns; exact phrases below outrank a ST/LT *flag* column.
+    "broker_gain": [
+        "realised gain loss", "realized gain loss", "realised p&l", "realized p&l",
+        "realised pnl", "realized pnl", "realised profit", "realized profit",
+        "realised gain", "realized gain", "capital gain loss", "capital gain",
+        "profit loss", "gain loss", "taxable capital gain", "taxable profit",
+        "taxable gain", "net profit", "net gain", "gross profit",
+        "p&l", "pnl", "profit", "gain",
     ],
 }
 
