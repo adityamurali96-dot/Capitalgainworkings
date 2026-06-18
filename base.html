@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cg-engine</title>
+<style>
+:root{--ink:#1a1a1a;--mut:#666;--line:#e2e2e2;--accent:#2b5fa8;--ok:#1f8a4c;--warn:#b8860b;--bad:#b03030;--bg:#fafafa}
+*{box-sizing:border-box}
+body{font:14px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--ink);margin:0;background:var(--bg)}
+header{background:#fff;border-bottom:1px solid var(--line);padding:14px 22px;display:flex;align-items:baseline;gap:14px}
+header b{font-size:16px}header .step{color:var(--mut);font-size:12px}
+.wrap{max-width:1180px;margin:22px auto;padding:0 22px}
+h2{margin:0 0 4px}.sub{color:var(--mut);margin:0 0 18px}
+.card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:20px;margin-bottom:16px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#f4f4f4;font-weight:600;position:sticky;top:0}
+.scroll{max-height:62vh;overflow:auto;border:1px solid var(--line);border-radius:6px}
+select,input[type=text],input[type=number]{font:13px inherit;padding:5px 7px;border:1px solid #ccc;border-radius:5px;width:100%}
+.btn{display:inline-block;background:var(--accent);color:#fff;border:0;padding:9px 18px;border-radius:6px;font:600 14px inherit;cursor:pointer;text-decoration:none}
+.btn.alt{background:#444}.btn:hover{opacity:.92}
+.flash{background:#fdecea;border:1px solid #f5c6cb;color:#842029;padding:10px 14px;border-radius:6px;margin-bottom:14px}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.trusted{background:#e6f4ea;color:var(--ok)}.proposed{background:#fcf3d9;color:var(--warn)}.manual{background:#fbe6e6;color:var(--bad)}.declared{background:#eef;color:#445}
+.note{font-size:12px;color:var(--mut)}
+.req{color:var(--bad)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+label.fld{display:block;margin-bottom:10px}label.fld b{display:block;font-size:12px;margin-bottom:3px}
+.disc{font-size:12px;color:var(--mut);border-left:3px solid var(--line);padding-left:10px;margin-top:8px}
+.right{text-align:right}.mono{font-variant-numeric:tabular-nums}
+.kpi{font-size:22px;font-weight:700}
+</style></head><body>
+<header><b>cg-engine</b><span class="step">{% block step %}{% endblock %}</span></header>
+<div class="wrap">
+{% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{m}}</div>{% endfor %}{% endwith %}
+{% block body %}{% endblock %}
+</div></body></html>

@@ -1,0 +1,25 @@
+{% extends "base.html" %}{% block step %}2 · sheet & header{% endblock %}
+{% block body %}
+<h2>Pick the sheet and the header row</h2>
+<p class="sub">{{filename}} — broker files often carry client-info rows above the real header. Click the row that holds the column names.</p>
+<form action="{{url_for('pick')}}" method="post">
+{% for sn, rows in preview.items() %}
+<div class="card">
+  <label class="fld"><b>Sheet</b>
+    <label><input type="radio" name="sheet" value="{{sn}}" {% if loop.first %}checked{% endif %}> {{sn}}</label>
+  </label>
+  <div class="scroll"><table>
+    <tr><th>use as header</th>{% for c in range(rows[0]|length) %}<th>{{loop.index0}}</th>{% endfor %}</tr>
+    {% for r in rows %}
+    <tr>
+      <td><input type="radio" name="header_row" value="{{loop.index0}}" {% if loop.index0==0 %}checked{% endif %}></td>
+      {% for c in r %}<td>{{c[:24]}}</td>{% endfor %}
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endfor %}
+<button class="btn" type="submit">Use this header →</button>
+</form>
+<p class="note">Header-row radios are shared across the preview; pick the row index that matches your chosen sheet.</p>
+{% endblock %}

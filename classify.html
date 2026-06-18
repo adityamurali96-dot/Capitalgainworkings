@@ -1,0 +1,49 @@
+{% extends "base.html" %}{% block step %}4 · classify{% endblock %}
+{% block body %}
+<h2>Confirm classification</h2>
+<p class="sub">
+  <span class="pill trusted">trusted</span> ISIN hit — accept &nbsp;
+  <span class="pill proposed">proposed</span> name match — confirm &nbsp;
+  <span class="pill manual">manual</span> set it yourself.
+  50AA shows only for debt rows; the proposal is pre-filled from the acquisition date.
+</p>
+<form action="{{url_for('classify_step')}}" method="post">
+<div class="card">
+  <p>
+    <button type="button" class="btn alt" onclick="setAll50('no')">Set 50AA = No for all debt</button>
+    <button type="button" class="btn alt" onclick="setAll50('yes')">Set 50AA = Yes for all debt</button>
+    <span class="note" id="c50"></span>
+  </p>
+  <div class="scroll"><table>
+    <tr><th>#</th><th>Security</th><th>ISIN</th><th>Asset type</th><th>Conf.</th>
+        <th>Basis / reason</th><th>STT paid</th><th>50AA / MLD</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{r.i+1}}</td>
+      <td>{{r.name}}</td>
+      <td class="mono">{{r.isin}}</td>
+      <td>
+        <select name="asset_{{r.i}}" onchange="toggle50(this,{{r.i}})">
+          {% for a in asset_types %}<option value="{{a}}" {% if a==r.asset_type %}selected{% endif %}>{{a}}</option>{% endfor %}
+        </select>
+        <input type="hidden" name="conf_{{r.i}}" value="{{r.confidence}}">
+        <input type="hidden" name="basis_{{r.i}}" value="{{r.basis}}">
+      </td>
+      <td><span class="pill {{r.confidence}}">{{r.confidence}}</span></td>
+      <td class="note">{{r.basis}}{% if r.reason %} — {{r.reason}}{% endif %}</td>
+      <td><select name="stt_{{r.i}}"><option value="yes" {% if r.stt %}selected{% endif %}>Yes</option><option value="no" {% if not r.stt %}selected{% endif %}>No</option></select></td>
+      <td><select name="f50_{{r.i}}" id="f50_{{r.i}}" {% if not r.is_debt %}disabled{% endif %}>
+            <option value="no" {% if not r.prop50 %}selected{% endif %}>No</option>
+            <option value="yes" {% if r.prop50 %}selected{% endif %}>Yes</option></select></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+<button class="btn" type="submit">Compute →</button>
+</form>
+<script>
+function toggle50(sel,i){var f=document.getElementById('f50_'+i);f.disabled=(sel.value!=='mf_debt');}
+function setAll50(v){var n=0;document.querySelectorAll('select[id^=f50_]').forEach(function(s){if(!s.disabled){s.value=v;n++;}});
+  document.getElementById('c50').textContent='set '+n+' debt rows to 50AA='+v;}
+</script>
+{% endblock %}

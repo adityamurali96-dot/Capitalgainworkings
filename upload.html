@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block step %}1 · upload{% endblock %}
+{% block body %}
+<h2>Upload a capital-gains statement</h2>
+<p class="sub">One source file at a time — xlsx, xls, or csv. You map the columns next.</p>
+<div class="card">
+  <form action="{{url_for('upload')}}" method="post" enctype="multipart/form-data">
+    <p><input type="file" name="file" accept=".xlsx,.xls,.csv,.tsv" required></p>
+    <p><button class="btn" type="submit">Read file →</button></p>
+  </form>
+  <p class="note">ISIN classification DB: {{db_status}}</p>
+</div>
+<div class="disc">
+This tool assists computation. It surfaces the classification basis and the full
+gain logic for every row so you can verify them. Final responsibility for the
+figures and the filing rests with the preparer.
+</div>
+{% endblock %}

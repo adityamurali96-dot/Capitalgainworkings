@@ -1,0 +1,51 @@
+{% extends "base.html" %}{% block step %}3 · map & declare{% endblock %}
+{% block body %}
+<h2>Map columns &amp; declare the source</h2>
+<p class="sub">Map each canonical field to a source column. <span class="req">*</span> = required. Then declare the facts the engine must not guess.</p>
+<form action="{{url_for('mapping_step')}}" method="post">
+
+<div class="card">
+  <h3 style="margin-top:0">Column mapping</h3>
+  <div class="grid">
+  {% for f in fields %}
+    <label class="fld"><b>{{f}}{% if f in required %} <span class="req">*</span>{% endif %}</b>
+      <select name="map_{{f}}">
+        <option value="">— not present —</option>
+        {% for h in headers %}<option value="{{h}}">{{h}}</option>{% endfor %}
+      </select>
+    </label>
+  {% endfor %}
+  </div>
+  <p class="note">ISIN is also auto-parsed from the security name if embedded (e.g. <i>ICICI Bank Ltd-INE090A01021</i>).</p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">Per-source declarations</h3>
+  <div class="grid">
+    <label class="fld"><b>Source / client label</b>
+      <input type="text" name="source_label" placeholder="e.g. Zerodha — Deepak" value="Source"></label>
+    <label class="fld"><b>Cost basis meaning <span class="req">*</span> — the highest-risk call</b>
+      <select name="cost_basis_meaning">
+        <option value="raw">RAW historical cost (engine applies grandfathering) — Zerodha/Groww/ICICI/Kotak/PMS</option>
+        <option value="grandfathered">ALREADY grandfathered (engine must NOT re-apply FMV) — CAMS/KFIN, MProfit/Tallis w/ FMV</option>
+      </select></label>
+    <label class="fld"><b>Default asset type (if file is homogeneous)</b>
+      <select name="default_asset_type">
+        <option value="">— classify per row —</option>
+        {% for a in asset_types %}<option value="{{a}}">{{a}}</option>{% endfor %}
+      </select></label>
+    <label class="fld"><b>FMV column basis</b>
+      <select name="fmv_basis">
+        <option value="per_unit">per unit (Winman convention)</option>
+        <option value="total">total value</option>
+      </select></label>
+    <label class="fld"><b>STT paid on sale (default)</b>
+      <select name="default_stt_paid"><option value="yes">Yes</option><option value="no">No</option></select></label>
+    <label class="fld"><b>Section 50AA / MLD (default)</b>
+      <select name="default_is_50aa"><option value="no">No</option><option value="yes">Yes</option></select></label>
+  </div>
+</div>
+
+<button class="btn" type="submit">Classify rows →</button>
+</form>
+{% endblock %}

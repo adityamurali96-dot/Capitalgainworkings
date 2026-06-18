@@ -1,0 +1,56 @@
+{% extends "base.html" %}{% block step %}5 · output{% endblock %}
+{% block body %}
+{% if not ok %}
+<h2>No computable rows</h2>
+<div class="card"><p>Every row failed to assemble. Fixes below, then go back and remap.</p>
+<ul>{% for e in errors %}<li class="note">{{e}}</li>{% endfor %}</ul>
+<a class="btn" href="{{url_for('home')}}">Start over</a></div>
+{% else %}
+<h2>Done — two outputs written</h2>
+<p class="sub">Saved to <span class="mono">{{out_dir}}</span>. Net gain across all buckets: <b class="mono">{{ '{:,.0f}'.format(total_gain) }}</b></p>
+
+<div class="card">
+  <a class="btn" href="{{url_for('download', which='summary')}}">⬇ Output A — CG Summary + Workings + COI</a>
+  <a class="btn" href="{{url_for('download', which='winman')}}">⬇ Output B — Winman (xlsx)</a>
+  <p class="note" style="margin-top:12px">Winman routing:
+    {% for s,c in counts.items() %}<b>{{s}}</b>: {{c}} &nbsp; {% endfor %}</p>
+</div>
+
+{% if errors %}
+<div class="card"><h3 style="margin-top:0">Skipped rows ({{errors|length}})</h3>
+<ul>{% for e in errors %}<li class="note">{{e}}</li>{% endfor %}</ul></div>
+{% endif %}
+
+<div class="card">
+  <h3 style="margin-top:0">Logic snapshot (also on the Workings tab)</h3>
+  <div class="scroll"><table>
+    <tr><th>Security</th><th>Asset</th><th>Conf.</th><th>Section</th><th>Rate</th>
+        <th>LTCG?</th><th>GF</th><th class="right">Net sale</th><th class="right">Cost used</th>
+        <th class="right">Gain</th><th>Flags</th></tr>
+    {% for r in results %}
+    <tr>
+      <td>{{r.tx.security_name[:40]}}</td>
+      <td>{{r.tx.asset_type}}</td>
+      <td><span class="pill {{r.tx.classification_confidence}}">{{r.tx.classification_confidence}}</span></td>
+      <td>{{r.section}}</td><td>{{r.rate_label}}</td>
+      <td>{{ 'Yes' if r.is_ltcg else 'No' }}</td>
+      <td>{{ 'Yes' if r.grandfathering_applied else '—' }}</td>
+      <td class="right mono">{{ '{:,.0f}'.format(r.net_sale_consideration) }}</td>
+      <td class="right mono">{{ '{:,.0f}'.format(r.cost_used) }}</td>
+      <td class="right mono">{{ '{:,.0f}'.format(r.gain) }}</td>
+      <td class="note">{{ '; '.join(r.flags) }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="disc">
+Output B carries only the input columns Winman needs (computed cells left blank) in
+Winman's column order. Paste the data block into your live <i>securitiesshortGain.xlsm</i>
+and let the macro finish the gain columns — keeping one source of truth. Either output
+is lot-level with ISIN, sale date, sale consideration and quantity intact, so the AIS
+reco can consume it downstream.
+</div>
+<a class="btn alt" href="{{url_for('home')}}">Process another source</a>
+{% endif %}
+{% endblock %}
