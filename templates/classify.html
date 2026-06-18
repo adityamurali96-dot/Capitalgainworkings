@@ -7,6 +7,8 @@
   <span class="pill manual">manual</span> set it yourself.
   50AA shows only for debt rows; the proposal is pre-filled from the acquisition date.
 </p>
+{% if skipped %}<p class="note">Skipped {{skipped}} non-lot row(s) — section
+dividers, sub-totals or repeated headers — so they don't reach the engine as errors.</p>{% endif %}
 <form action="{{url_for('classify_step')}}" method="post">
 <div class="card">
   <p>

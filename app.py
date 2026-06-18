@@ -14,7 +14,7 @@ from flask import (Flask, request, render_template, redirect, url_for,
                    session, send_file, flash)
 import pandas as pd
 
-import compute, mapping, isin_db
+import compute, mapping, isin_db, detect
 from writer_summary import write_summary
 from writer_winman import write_winman
 
@@ -47,6 +47,52 @@ def _read_any(file_storage, header_row=None):
     return xls
 
 
+def _suggest_forward_fill(j: dict, automap: dict) -> bool:
+    """Propose carrying name/ISIN down when they are far sparser than the sale
+    columns — the signature of a grouped layout (e.g. IIFL lists the scrip once)."""
+    rows = j.get("rows_below", [])
+    if not rows:
+        return False
+    def fill_rate(field):
+        col = automap.get(field, {}).get("col")
+        if col is None:
+            return None
+        n = sum(1 for r in rows if col < len(r) and str(r[col]).strip())
+        return n / len(rows)
+    name_r = fill_rate("security_name")
+    date_r = fill_rate("transfer_date") or fill_rate("sale_consideration")
+    return bool(name_r is not None and date_r and name_r < 0.6 * date_r)
+
+
+def _finalise_rows(j: dict, m: dict, forward_fill: bool) -> list[dict]:
+    """Build the clean per-lot rows the engine will consume: dict-ify, optionally
+    forward-fill grouped name/ISIN, then drop section-divider, total/footnote and
+    repeated-header rows. The skipped count is stashed for the next screen."""
+    headers = j["headers"]
+    rows = [dict(zip(headers, r)) for r in j.get("rows_below", [])]
+    if forward_fill:
+        ff_cols = [m[f] for f in ("security_name", "isin") if m.get(f)]
+        if ff_cols:
+            detect.forward_fill_cols(rows, ff_cols)
+    name_c = m.get("security_name")
+    date_c = m.get("transfer_date")
+    sale_c = m.get("sale_consideration")
+    kept, skipped = [], 0
+    for r in rows:
+        if detect.is_repeat_header(list(r.values()), headers):
+            skipped += 1; continue
+        if name_c and detect.is_junk_label(r.get(name_c, "")):
+            skipped += 1; continue
+        # a real lot has at least a sale date or a sale amount
+        has_sale = (date_c and str(r.get(date_c, "")).strip()) or \
+                   (sale_c and str(r.get(sale_c, "")).strip())
+        if not has_sale:
+            skipped += 1; continue
+        kept.append(r)
+    j["skipped"] = skipped
+    return kept
+
+
 @app.route("/")
 def home():
     session.pop("jid", None)
@@ -63,8 +109,17 @@ def upload():
         sheets = _read_any(f, header_row=None)  # raw, no header yet
     except Exception as e:
         flash(f"Could not read file: {e}"); return redirect(url_for("home"))
-    j["sheets"] = {k: v.fillna("").astype(str).values.tolist() for k, v in sheets.items()}
+    # drop all-blank columns (the .xls merged-cell spillover) so every later
+    # step — preview, header detect, mapping — sees only real columns.
+    cleaned = {}
+    for k, v in sheets.items():
+        rows = v.fillna("").astype(str).values.tolist()
+        rows, _ = detect.drop_blank_columns(rows)
+        cleaned[k] = rows
+    j["sheets"] = cleaned
     j["filename"] = f.filename
+    # auto-detect: which sheet is the data, which row is the header, column wiring
+    j["ranked"] = detect.rank_sheets(cleaned)
     return redirect(url_for("pick"))
 
 
@@ -89,14 +144,19 @@ def pick():
             else:
                 seen[h] = 0
             clean.append(h)
-        data = [dict(zip(clean, r)) for r in rows[header_row + 1:] if any(str(c).strip() for c in r)]
+        # keep every non-blank row below the header, in order (group-header and
+        # divider rows are filtered later, once the mapping is known).
+        below = [list(r) for r in rows[header_row + 1:] if any(str(c).strip() for c in r)]
         j["headers"] = clean
-        j["data"] = data
+        j["rows_below"] = below
         return redirect(url_for("mapping_step"))
-    # preview first sheet
+    # preview every sheet; rank tells the template what to recommend / pre-select
     preview = {sn: j["sheets"][sn][:15] for sn in sheet_names}
+    ranked = {r["name"]: r for r in j.get("ranked", [])}
+    rec = j.get("ranked", [{}])[0] if j.get("ranked") else {}
     return render_template("pick.html", sheets=sheet_names, preview=preview,
-                           filename=j.get("filename", ""))
+                           filename=j.get("filename", ""), ranked=ranked,
+                           recommend=rec.get("name"), rec_header=rec.get("header_row"))
 
 
 @app.route("/map", methods=["GET", "POST"])
@@ -114,11 +174,15 @@ def mapping_step():
             "default_is_50aa": request.form.get("default_is_50aa") == "yes",
             "fmv_basis": request.form.get("fmv_basis", "per_unit"),
         }
+        forward_fill = request.form.get("forward_fill") == "yes"
         j["mapping"] = m; j["decl"] = decl
+        j["data"] = _finalise_rows(j, m, forward_fill)
         return redirect(url_for("classify_step"))
+    automap = detect.auto_map(j["headers"])
     return render_template("map.html", headers=j["headers"],
                            fields=mapping.CANONICAL_FIELDS, required=mapping.REQUIRED,
-                           asset_types=sorted(compute.ASSET_TYPES))
+                           asset_types=sorted(compute.ASSET_TYPES),
+                           automap=automap, ff_suggest=_suggest_forward_fill(j, automap))
 
 
 @app.route("/classify", methods=["GET", "POST"])
@@ -167,7 +231,7 @@ def classify_step():
     j["prefill"] = rows
     return render_template("classify.html", rows=rows,
                            asset_types=sorted(compute.ASSET_TYPES),
-                           decl=decl)
+                           decl=decl, skipped=j.get("skipped", 0))
 
 
 @app.route("/result")

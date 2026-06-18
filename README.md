@@ -33,14 +33,24 @@ The Flask templates live in `templates/`; the ISIN classification DB
 
 ## The flow
 
-1. **Upload** one source file (xlsx / xls / csv).
-2. **Pick** the sheet and the header row (skips broker client-info junk rows).
-3. **Map & declare** — map source columns to the 8 canonical fields, and declare
-   the per-source facts the engine must not guess:
+1. **Upload** one source file (xlsx / xls / csv). On read, all-blank columns (the
+   `.xls` merged-cell spillover) are dropped, then every sheet is scanned to find
+   the lot-level data and its header row.
+2. **Pick** the sheet and the header row — the sheet that looks like lot-level
+   data is **recommended and pre-selected**, with its detected header row
+   highlighted (skips broker client-info junk rows). Override either if wrong.
+3. **Map & declare** — the source columns are **auto-matched** to the 8 canonical
+   fields from their header names (green = confident, amber = low-confidence
+   guess); review and fix, then declare the per-source facts the engine must not
+   guess:
    - `cost_basis_meaning` — **raw** (engine grandfathers) vs **already-grandfathered**
      (engine suppresses FMV). This is the highest-risk silent error; it is a
      required choice.
    - default asset type (if homogeneous), STT default, 50AA default, FMV basis.
+   - **forward-fill name/ISIN** — for grouped layouts that print the scrip once
+     and leave the lot rows beneath blank (IIFL); auto-suggested when detected.
+   Section-divider, sub-total and repeated-header rows are dropped here so they
+   never reach the engine as errors; the skipped count is shown next.
 4. **Classify** — three-state gate per row:
    - `trusted` ISIN hit · `proposed` name match (confirm) · `manual` set it.
    - 50AA flag shows only for debt rows, pre-filled from acquisition date
@@ -74,8 +84,16 @@ The Flask templates live in `templates/`; the ISIN classification DB
 - `compute.py` — the deterministic core, **zero I/O**. 23-Jul-2024 split,
   Section 55(2)(ac) nested grandfathering, holding-period month test, section
   routing, rate labels. Every rule is here, one place to tweak.
+- `detect.py` — the auto-detection layer, **zero I/O**. The broker-header
+  synonym table (`SYNONYMS`), sheet/header detection, greedy column auto-mapping,
+  and the blank-column / forward-fill / divider-row handling. Add a new broker by
+  dropping its header aliases into `SYNONYMS` — no other change. Every guess is
+  shown with confidence on the map screen and is overridable; nothing routes
+  silently.
 - `tests/test_compute.py` — hand-checked. Run `python tests/test_compute.py`.
   Includes the proof that FMV is suppressed when cost is already grandfathered.
+- `tests/test_detect.py` — unit tests for the matcher, plus a corpus test that
+  runs detection over `reference/*` when present. Run `python tests/test_detect.py`.
 - `isin_db.py` — set `ISIN_DB_PATH` (or drop `isin_master.db` beside the code).
   Schema is introspected, so differing column names are tolerated. No DB → every
   row degrades to manual; nothing is guessed.
@@ -88,6 +106,10 @@ The Flask templates live in `templates/`; the ISIN classification DB
 ## Known v1 boundaries
 
 - One source file per run (multi-source consolidation is the next iteration).
+- Aggregated / redemption-only statements that carry no lot-level acquisition
+  date (CAMS & Karvy/KFIN transaction sheets, Kotak's per-scrip Gain & Loss
+  summary) can't be computed lot-by-lot — detection flags the missing required
+  field rather than guessing. Use the AMC/broker's lot-level statement instead.
 - Foreign securities: pre-convert to INR (excluded from compute by design).
 - `Is it LTCG?` is set explicitly per the Winman skill's dropdown rule, not left
   blank — change in `writer_winman._val` if your build prefers blank.
