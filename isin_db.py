@@ -22,14 +22,29 @@ from typing import Optional
 DB_PATH = os.environ.get("ISIN_DB_PATH",
                          os.path.join(os.path.dirname(os.path.abspath(__file__)), "isin_master.db"))
 
-# map whatever the DB calls a category onto our asset_type vocabulary
+# map whatever the DB calls a category onto our asset_type vocabulary.
+# Covers both the generic vocabulary AND the values the bundled isin_master.db
+# actually carries in `suggested_tax_class` (equity_listed / equity_etf /
+# equity_mf / debt_mf / debt_security / review). "review" is deliberately left
+# unmapped -> handled as a confirm-me state in lookup(), never silently trusted.
 _CATEGORY_MAP = {
     "equity": "equity", "equity_share": "equity", "stock": "equity", "share": "equity",
+    "equity_listed": "equity",
     "eof": "eof", "equity_oriented": "eof", "equity mutual fund": "eof", "equity_mf": "eof",
-    "elss": "eof",
-    "debt": "mf_debt", "mf_debt": "mf_debt", "debt_mf": "mf_debt", "liquid": "mf_debt",
-    "hybrid": "mf_debt", "gold": "mf_debt", "international": "mf_debt", "fof": "mf_debt",
+    "equity_etf": "eof", "elss": "eof",
+    "debt": "mf_debt", "mf_debt": "mf_debt", "debt_mf": "mf_debt", "debt_security": "mf_debt",
+    "liquid": "mf_debt", "hybrid": "mf_debt", "gold": "mf_debt", "international": "mf_debt",
+    "fof": "mf_debt",
 }
+
+# Column-name candidates for the orientation/category column, in priority order.
+# The bundled DB names it `suggested_tax_class`; generic builds may use any of the
+# rest. Priority matters: prefer the tax-class column over the raw instrument_type
+# (which carries values like MF/ETF that don't encode equity-vs-debt orientation).
+_TYPE_COL_PRIORITY = (
+    "suggested_tax_class", "asset_type", "tax_class", "category", "scheme_category",
+    "type", "class", "orientation", "asset_class", "instrument_type",
+)
 
 _INTL_HINT = re.compile(r"\b(us|nasdaq|global|international|overseas|s&p|world|foreign)\b", re.I)
 
@@ -52,11 +67,12 @@ def _detect_columns(con):
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     # prefer a table that actually has an isin-like column
     for t in tables:
-        cols = [c[1].lower() for c in cur.execute(f"PRAGMA table_info('{t}')").fetchall()]
         real = {c[1].lower(): c[1] for c in cur.execute(f"PRAGMA table_info('{t}')").fetchall()}
+        cols = list(real)
         isin_col = next((real[c] for c in cols if "isin" in c), None)
         name_col = next((real[c] for c in cols if c in ("name","security_name","scheme","scheme_name","symbol","description")), None)
-        type_col = next((real[c] for c in cols if c in ("asset_type","category","type","class","orientation","asset_class")), None)
+        # priority-ordered so the tax-class column wins over raw instrument_type
+        type_col = next((real[c] for c in _TYPE_COL_PRIORITY if c in real), None)
         if isin_col:
             return t, isin_col, name_col, type_col
     return None
@@ -90,7 +106,8 @@ def lookup(isin: Optional[str], name: Optional[str]) -> dict:
                 f"SELECT * FROM '{table}' WHERE UPPER({c_isin}) = ?",
                 (isin.strip().upper(),)).fetchone()
             if row:
-                at = _norm_type(row[c_type]) if c_type else None
+                raw = row[c_type] if c_type else None
+                at = _norm_type(raw)
                 if at:
                     # demote international equity funds that masquerade as equity
                     if at == "eof" and c_name and _INTL_HINT.search(str(row[c_name] or "")):
@@ -98,7 +115,11 @@ def lookup(isin: Optional[str], name: Optional[str]) -> dict:
                                 "confidence": "proposed", "matched": isin, "reason": "international fund, verify orientation"}
                     return {"asset_type": at, "basis": f"ISIN exact match in {table}",
                             "confidence": "trusted", "matched": isin, "reason": ""}
-                return _miss("ISIN found but category not mapped — set manually", matched=isin)
+                # ISIN is in the DB but the class can't be auto-routed.
+                if str(raw or "").strip().lower() == "review":
+                    return _miss("DB flags this as review (hybrid / international / gold / "
+                                 "index / FoF) — confirm orientation", matched=isin)
+                return _miss(f"ISIN found but class {raw!r} not mapped — set manually", matched=isin)
 
         # 2) name match -> proposed (heuristic, never trusted)
         if name and c_name:

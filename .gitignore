@@ -1,0 +1,8 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# cg-engine outputs (default lands in ~/Downloads/cg-engine-out)
+cg-engine-out/
