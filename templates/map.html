@@ -58,6 +58,11 @@ declare the facts the engine must not guess.</p>
         <option value="per_unit">per unit (Winman convention)</option>
         <option value="total">total value</option>
       </select></label>
+    <label class="fld"><b>Grandfathering basis</b>
+      <select name="grandfathering_basis">
+        <option value="by_date">By acquisition date — FMV substituted only for lots acquired before 01-Feb-2018 (acquisition date required)</option>
+        <option value="fmv">FMV-based — when a lot has no acquisition date, use the 31-Jan-2018 FMV (pre-2018, long-term); if there is no FMV either, it is treated as SHORT TERM (warned)</option>
+      </select></label>
     <label class="fld"><b>STT paid on sale (default)</b>
       <select name="default_stt_paid"><option value="yes">Yes</option><option value="no">No</option></select></label>
     <label class="fld"><b>Section 50AA / MLD (default)</b>

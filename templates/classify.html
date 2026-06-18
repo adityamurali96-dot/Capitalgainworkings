@@ -1,5 +1,6 @@
 {% extends "base.html" %}{% block step %}4 · classify{% endblock %}
 {% block body %}
+<style>tr.sheetrow td{background:#eef3fb;color:#2b5fa8;font-weight:600;border-top:2px solid #2b5fa8}</style>
 <h2>Confirm classification</h2>
 <p class="sub">
   <span class="pill trusted">trusted</span> ISIN hit — accept &nbsp;
@@ -19,7 +20,12 @@ dividers, sub-totals or repeated headers — so they don't reach the engine as e
   <div class="scroll"><table>
     <tr><th>#</th><th>Security</th><th>ISIN</th><th>Asset type</th><th>Conf.</th>
         <th>Basis / reason</th><th>STT paid</th><th>50AA / MLD</th></tr>
+    {% set ns = namespace(prev=None) %}
     {% for r in rows %}
+    {% if multi_sheet and r.sheet != ns.prev %}
+    <tr class="sheetrow"><td colspan="8">Sheet: <b>{{ r.sheet }}</b></td></tr>
+    {% set ns.prev = r.sheet %}
+    {% endif %}
     <tr>
       <td>{{r.i+1}}</td>
       <td>{{r.name}}</td>
@@ -32,7 +38,8 @@ dividers, sub-totals or repeated headers — so they don't reach the engine as e
         <input type="hidden" name="basis_{{r.i}}" value="{{r.basis}}">
       </td>
       <td><span class="pill {{r.confidence}}">{{r.confidence}}</span></td>
-      <td class="note">{{r.basis}}{% if r.reason %} — {{r.reason}}{% endif %}</td>
+      <td class="note">{{r.basis}}{% if r.reason %} — {{r.reason}}{% endif %}
+        {% if r.gf_note %}<div style="margin-top:3px"><span class="pill {{ 'manual' if r.gf_warn else 'trusted' }}">GF</span> {{ r.gf_note }}</div>{% endif %}</td>
       <td><select name="stt_{{r.i}}"><option value="yes" {% if r.stt %}selected{% endif %}>Yes</option><option value="no" {% if not r.stt %}selected{% endif %}>No</option></select></td>
       <td><select name="f50_{{r.i}}" id="f50_{{r.i}}" {% if not r.is_debt %}disabled{% endif %}>
             <option value="no" {% if not r.prop50 %}selected{% endif %}>No</option>

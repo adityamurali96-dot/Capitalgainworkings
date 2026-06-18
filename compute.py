@@ -72,6 +72,8 @@ class Tx:
     source_label: str = ""
     classification_basis: str = ""          # how asset_type was decided (trace)
     classification_confidence: str = ""     # trusted | proposed | manual
+    acq_inferred: bool = False              # acquisition_date was synthesised, not in source
+    acq_note: str = ""                      # why it was synthesised (rides into flags)
 
     def __post_init__(self):
         if self.asset_type not in ASSET_TYPES:
@@ -296,6 +298,11 @@ def compute_row(tx: Tx, ay: str = "2025-26") -> Result:
 
     # routing (may force is_ltcg False for vda/50aa already handled)
     _route(tx, res.is_ltcg, post, ay, res)
+
+    # surface a synthesised acquisition date (FMV-basis grandfathering) so the
+    # preparer sees exactly why a lot landed long-term or short-term.
+    if tx.acq_note:
+        res.flags.append(tx.acq_note)
 
     # gain
     res.gain = res.net_sale_consideration - res.cost_used
