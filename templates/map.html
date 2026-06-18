@@ -1,6 +1,11 @@
 {% extends "base.html" %}{% block step %}3 · map & declare{% endblock %}
 {% block body %}
 <h2>Map columns &amp; declare the source</h2>
+{% if combined and combined|length > 1 %}
+<p class="note">Combining {{combined|length}} sheets into one run:
+{% for sn, n in combined %}<b>{{sn}}</b> ({{n}} rows){% if not loop.last %} + {% endif %}{% endfor %}.
+Map the columns once below — it applies to all of them.</p>
+{% endif %}
 {% set matched = automap|length %}
 <p class="sub">We auto-matched <b>{{matched}}</b> of {{fields|length}} columns from the
 header names. <span class="req">*</span> = required. Review the pre-filled picks

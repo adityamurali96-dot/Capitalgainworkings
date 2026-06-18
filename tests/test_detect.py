@@ -65,6 +65,28 @@ def test_drop_blank_columns():
     assert new == [["a", "b"], ["c", "d"]]
 
 
+def test_combine_aligned_merges_sheets_by_position():
+    # two "sheets": same column order, header at different rows, header text differs
+    st = [["Stock name", "ISIN", "Sell value"],     # header at row 0
+          ["INFY", "INE009A01021", "100"],
+          ["", "", ""],                              # blank row -> dropped
+          ["WIPRO", "INE075A01022", "200"]]
+    lt = [["preamble", "", ""],
+          ["Stock NAME", "isin", "Sell Value"],      # header at row 1, different case
+          ["TCS", "INE467B01029", "300"]]
+    out = detect.combine_aligned([(st, 0), (lt, 1)], width=3)
+    assert out == [["INFY", "INE009A01021", "100"],
+                   ["WIPRO", "INE075A01022", "200"],
+                   ["TCS", "INE467B01029", "300"]]
+
+
+def test_combine_aligned_pads_and_truncates_to_width():
+    a = [["h1", "h2", "h3", "h4"], ["a", "b", "c", "d"]]   # wider
+    b = [["h1", "h2"], ["e", "f"]]                          # narrower
+    out = detect.combine_aligned([(a, 0), (b, 0)], width=3)
+    assert out == [["a", "b", "c"], ["e", "f", ""]]
+
+
 def test_forward_fill_cols():
     rows = [{"name": "INFY", "qty": ""}, {"name": "", "qty": "10"},
             {"name": "", "qty": "20"}, {"name": "WIPRO", "qty": "5"}]
