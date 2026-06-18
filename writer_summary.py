@@ -44,11 +44,15 @@ def _amt(cell, formula_or_val, bold=False, fill=None):
     _f(cell, bold=bold, fill=fill)
 
 
-def write_summary(results, path, client="", ay="2025-26"):
+def write_summary(results, path, client="", ay="2025-26", validation=None):
     wb = Workbook()
     _summary_sheet(wb, results, client, ay)
     _workings_sheet(wb, results, client, ay)
     _coi_sheet(wb, results, client, ay)
+    if validation is not None:
+        # fold the broker-vs-engine check into the deliverable (Output A is self-checking)
+        from writer_validation import add_validation_sheets
+        add_validation_sheets(wb, validation, client)
     wb.remove(wb["Sheet"]) if "Sheet" in wb.sheetnames else None
     wb.save(path)
     return path

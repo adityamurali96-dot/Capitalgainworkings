@@ -6,15 +6,59 @@
 <ul>{% for e in errors %}<li class="note">{{e}}</li>{% endfor %}</ul>
 <a class="btn" href="{{url_for('home')}}">Start over</a></div>
 {% else %}
-<h2>Done — two outputs written</h2>
+<h2>Done — three outputs written</h2>
 <p class="sub">Saved to <span class="mono">{{out_dir}}</span>. Net gain across all buckets: <b class="mono">{{ '{:,.0f}'.format(total_gain) }}</b></p>
 
 <div class="card">
-  <a class="btn" href="{{url_for('download', which='summary')}}">⬇ Output A — CG Summary + Workings + COI</a>
+  <a class="btn" href="{{url_for('download', which='summary')}}">⬇ Output A — CG Summary + Workings + COI + Validation</a>
   <a class="btn" href="{{url_for('download', which='winman')}}">⬇ Output B — Winman (xlsx)</a>
+  <a class="btn alt" href="{{url_for('download', which='validation')}}">⬇ Output C — Validation (broker vs engine)</a>
   <p class="note" style="margin-top:12px">Winman routing:
     {% for s,c in counts.items() %}<b>{{s}}</b>: {{c}} &nbsp; {% endfor %}</p>
 </div>
+
+{% if validation %}
+{% set rl = validation.rollup %}
+<div class="card">
+  <h3 style="margin-top:0">Validation — broker vs engine</h3>
+  {% if validation.has_broker_gain() %}
+  <p class="sub">Cross-checking the engine against the broker's own per-lot gain on
+    <b>{{v_counts.with_broker}}</b> of {{v_counts.lots}} lots —
+    <b style="color:var(--ok)">{{v_counts.match}} match</b>,
+    <b style="color:var(--bad)">{{v_counts.mismatch}} differ</b>.
+    {% if v_counts.no_broker %}{{v_counts.no_broker}} lot(s) had no broker figure.{% endif %}
+    Full per-lot detail on the <b>Lot Validation</b> tab.</p>
+  <div class="scroll"><table>
+    <tr><th></th><th class="right">Engine gain</th><th class="right">Broker gain</th>
+        <th class="right">Delta</th><th>Status</th></tr>
+    {% for key, label in [('short','Short term'), ('long','Long term'), ('total','TOTAL')] %}
+    {% set d = rl[key] %}
+    <tr>
+      <td><b>{{label}}</b></td>
+      <td class="right mono">{{ '{:,.0f}'.format(d.engine) }}</td>
+      {% if d.n_broker %}
+      <td class="right mono">{{ '{:,.0f}'.format(d.broker) }}</td>
+      <td class="right mono">{{ '{:,.0f}'.format(d.delta) }}</td>
+      <td><span class="pill {{ 'trusted' if d.status=='match' else 'manual' }}">
+        {{ '✓ match' if d.status=='match' else '✗ differs' }}</span></td>
+      {% else %}<td class="right">—</td><td class="right">—</td><td class="note">no broker figure</td>{% endif %}
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="sub">No broker per-lot gain column was mapped, so the engine could not be
+    cross-checked against the statement's own figures. Re-run and map the broker's
+    <b>gain / P&amp;L / capital gain</b> column on the Map screen to enable this.</p>
+  {% endif %}
+  {% if validation.printed %}
+  <p class="note" style="margin-top:10px"><b>Figures the broker already printed</b>
+    (eyeball against the roll-up; full list on the Validation tab):
+    {% for p in validation.printed[:8] %}
+      <b>{{p.label}}</b> = {{ '{:,.0f}'.format(p.value) }}{% if not loop.last %};{% endif %}
+    {% endfor %}</p>
+  {% endif %}
+</div>
+{% endif %}
 
 {% if errors %}
 <div class="card"><h3 style="margin-top:0">Skipped rows ({{errors|length}})</h3>

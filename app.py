@@ -14,10 +14,11 @@ from flask import (Flask, request, render_template, redirect, url_for,
                    session, send_file, flash)
 import pandas as pd
 
-import compute, mapping, isin_db, detect, reco
+import compute, mapping, isin_db, detect, reco, validate
 from writer_summary import write_summary
 from writer_winman import write_winman
 from writer_reco import write_reco
+from writer_validation import write_validation
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("CG_SECRET", "cg-engine-local-dev")
@@ -369,12 +370,20 @@ def result():
     base = "".join(c for c in client if c.isalnum() or c in " _-").strip() or "client"
     sfile = os.path.join(OUT_DIR, f"{base}_CG_Summary.xlsx")
     wfile = os.path.join(OUT_DIR, f"{base}_Winman.xlsx")
-    write_summary(results, sfile, client=client, ay=j["decl"].get("ay", "2025-26"))
+    vfile = os.path.join(OUT_DIR, f"{base}_Validation.xlsx")
+    # validation: compare the engine against the broker's own already-stated figures
+    vres = validate.build_validation(results)
+    vres.printed = validate.scan_broker_totals(j.get("sheets", {}))
+    write_summary(results, sfile, client=client, ay=j["decl"].get("ay", "2025-26"),
+                  validation=vres)
     _, counts = write_winman(results, wfile)
+    write_validation(vres, vfile, client=client)
     j["results"] = results
     return render_template("result.html", ok=True, errors=errors, results=results,
                            counts=counts, summary_file=os.path.basename(sfile),
                            winman_file=os.path.basename(wfile),
+                           validation_file=os.path.basename(vfile),
+                           validation=vres, v_counts=vres.counts(),
                            total_gain=round(sum(r.gain for r in results), 2),
                            out_dir=OUT_DIR)
 
@@ -384,7 +393,9 @@ def download(which):
     j = job()
     client = j.get("decl", {}).get("source_label", "client")
     base = "".join(c for c in client if c.isalnum() or c in " _-").strip() or "client"
-    fn = f"{base}_CG_Summary.xlsx" if which == "summary" else f"{base}_Winman.xlsx"
+    names = {"summary": f"{base}_CG_Summary.xlsx", "winman": f"{base}_Winman.xlsx",
+             "validation": f"{base}_Validation.xlsx"}
+    fn = names.get(which, names["summary"])
     path = os.path.join(OUT_DIR, fn)
     if not os.path.exists(path):
         flash("File not found — re-run."); return redirect(url_for("home"))

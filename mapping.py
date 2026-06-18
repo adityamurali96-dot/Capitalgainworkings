@@ -13,6 +13,7 @@ from compute import Tx
 CANONICAL_FIELDS = [
     "security_name", "acquisition_date", "purchase_cost", "transfer_date",
     "sale_consideration", "quantity", "isin", "transfer_expenses", "fmv_31jan2018",
+    "broker_gain",
 ]
 REQUIRED = ["security_name", "acquisition_date", "purchase_cost", "transfer_date", "sale_consideration"]
 
@@ -85,6 +86,7 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
     sale = parse_amount(g("sale_consideration"))
     qty = parse_amount(g("quantity"))
     fmv = parse_amount(g("fmv_31jan2018"))
+    broker_gain = parse_amount(g("broker_gain"))   # broker's own figure; validation only
 
     # Grandfathering basis. Under "fmv" the acquisition date may be absent (many
     # broker statements drop it for grandfathered pre-2018 holdings and give only
@@ -134,6 +136,7 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
             purchase_cost=cost, sale_consideration=sale, asset_type=asset_type,
             quantity=qty, isin=isin, transfer_expenses=exp,
             fmv_31jan2018=fmv, fmv_basis=decl.get("fmv_basis", "per_unit"),
+            broker_gain=broker_gain,
             stt_paid=bool(stt), is_50aa=bool(is_50aa),
             cost_basis_meaning=decl.get("cost_basis_meaning", "raw"),
             source_label=decl.get("source_label", ""),
