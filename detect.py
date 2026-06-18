@@ -222,6 +222,21 @@ def drop_blank_columns(rows: list[list[str]]):
     return new, keep
 
 
+def combine_aligned(sheets_rows: list, width: int) -> list:
+    """Position-align rows from several sheets to `width` columns and concatenate,
+    skipping fully-blank rows. `sheets_rows` is a list of (rows, header_index).
+    Used when several sheets of one file share column order — short-term/long-term
+    or per-account splits — so one column mapping covers them all. Header text or
+    case may differ between sheets; alignment is by position, not by name."""
+    out = []
+    for rows, hr in sheets_rows:
+        for r in rows[hr + 1:]:
+            if not any(str(c).strip() for c in r):
+                continue
+            out.append([(r[i] if i < len(r) else "") for i in range(width)])
+    return out
+
+
 def forward_fill_cols(rows: list[dict], cols: list[str]) -> None:
     """
     Carry the last non-blank value of each named column down onto following rows

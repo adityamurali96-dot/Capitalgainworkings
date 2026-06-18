@@ -94,6 +94,19 @@ def _finalise_rows(j: dict, m: dict, forward_fill: bool) -> list[dict]:
     return kept
 
 
+def _dedupe_headers(cells):
+    """Header cells -> unique non-blank names (blanks become col1, col2, …)."""
+    seen, clean = {}, []
+    for i, h in enumerate(str(x).strip() for x in cells):
+        h = h or f"col{i+1}"
+        if h in seen:
+            seen[h] += 1; h = f"{h}.{seen[h]}"
+        else:
+            seen[h] = 0
+        clean.append(h)
+    return clean
+
+
 def _extract_records(file_storage):
     """Read a file for reconciliation: auto-pick the data sheet + header row,
     auto-map columns, and return (clean dict rows, automap, info). Reuses the
@@ -112,14 +125,7 @@ def _extract_records(file_storage):
         return [], {}, info
     sheet, hr = top["name"], top["header_row"]
     rows = cleaned[sheet]
-    seen, clean = {}, []
-    for i, h in enumerate(str(x).strip() for x in rows[hr]):
-        h = h or f"col{i+1}"
-        if h in seen:
-            seen[h] += 1; h = f"{h}.{seen[h]}"
-        else:
-            seen[h] = 0
-        clean.append(h)
+    clean = _dedupe_headers(rows[hr])
     automap = detect.auto_map(clean)
     below = [dict(zip(clean, r)) for r in rows[hr + 1:] if any(str(c).strip() for c in r)]
     name_c = automap.get("security_name", {}).get("header")
@@ -189,34 +195,57 @@ def pick():
     if "sheets" not in j:
         return redirect(url_for("home"))
     sheet_names = list(j["sheets"].keys())
-    if request.method == "POST":
-        sheet = request.form["sheet"]
-        header_row = int(request.form["header_row"])
-        rows = j["sheets"][sheet]
-        headers = [str(h).strip() for h in rows[header_row]]
-        # de-dupe blank/dup headers
-        seen = {}
-        clean = []
-        for i, h in enumerate(headers):
-            h = h or f"col{i+1}"
-            if h in seen:
-                seen[h] += 1; h = f"{h}.{seen[h]}"
-            else:
-                seen[h] = 0
-            clean.append(h)
-        # keep every non-blank row below the header, in order (group-header and
-        # divider rows are filtered later, once the mapping is known).
-        below = [list(r) for r in rows[header_row + 1:] if any(str(c).strip() for c in r)]
-        j["headers"] = clean
-        j["rows_below"] = below
-        return redirect(url_for("mapping_step"))
-    # preview every sheet; rank tells the template what to recommend / pre-select
-    preview = {sn: j["sheets"][sn][:15] for sn in sheet_names}
     ranked = {r["name"]: r for r in j.get("ranked", [])}
+    order = [r["name"] for r in j.get("ranked", [])]  # best-data-first
+
+    if request.method == "POST":
+        selected = request.form.getlist("sheets")
+        if not selected:
+            flash("Tick at least one sheet."); return redirect(url_for("pick"))
+        # per-sheet header row (defaults to the detected one)
+        hdr_of = {}
+        for sn in selected:
+            raw = request.form.get(f"header_row_{sn}")
+            det = ranked.get(sn, {}).get("header_row")
+            hdr_of[sn] = int(raw) if (raw not in (None, "")) else (det if det is not None else 0)
+        # primary = the selected sheet ranked highest (best detected structure);
+        # its header row defines the unified columns the others align onto.
+        primary = min(selected, key=lambda s: order.index(s) if s in order else 999)
+        unified = _dedupe_headers(j["sheets"][primary][hdr_of[primary]])
+        width = len(unified)
+        # combine: every selected sheet's rows, position-aligned to the unified
+        # width (same column order across ST/LT or per-account splits). Different
+        # header text/case across sheets is irrelevant — mapping is on `unified`.
+        per_sheet = {sn: detect.combine_aligned([(j["sheets"][sn], hdr_of[sn])], width)
+                     for sn in selected}
+        combined = [r for sn in selected for r in per_sheet[sn]]
+        per_sheet = {sn: len(rows) for sn, rows in per_sheet.items()}
+        j["headers"] = unified
+        j["rows_below"] = combined
+        j["selected_sheets"] = selected
+        j["sheet_counts"] = per_sheet
+        return redirect(url_for("mapping_step"))
+
+    # GET: preview deep enough to reach each detected header; flag the sheets that
+    # share the recommended sheet's structure so ST/LT splits pre-tick together.
     rec = j.get("ranked", [{}])[0] if j.get("ranked") else {}
+    rec_reqset = frozenset(f for f in detect.REQUIRED if f in rec.get("automap", {}))
+    autocheck, sheet_hdr = {}, {}
+    for idx, r in enumerate(j.get("ranked", [])):
+        rset = frozenset(f for f in detect.REQUIRED if f in r.get("automap", {}))
+        sheet_hdr[r["name"]] = r["header_row"]
+        autocheck[r["name"]] = (
+            (idx == 0 and r["header_row"] is not None) or
+            (r["header_row"] is not None and len(rset) >= 4 and rset == rec_reqset
+             and len(rec_reqset) >= 4)
+        )
+    deepest = max([h for h in sheet_hdr.values() if h is not None] + [0])
+    plen = min(40, max(15, deepest + 4))
+    preview = {sn: j["sheets"][sn][:plen] for sn in sheet_names}
     return render_template("pick.html", sheets=sheet_names, preview=preview,
                            filename=j.get("filename", ""), ranked=ranked,
-                           recommend=rec.get("name"), rec_header=rec.get("header_row"))
+                           recommend=rec.get("name"), autocheck=autocheck,
+                           sheet_hdr=sheet_hdr)
 
 
 @app.route("/map", methods=["GET", "POST"])
@@ -239,10 +268,13 @@ def mapping_step():
         j["data"] = _finalise_rows(j, m, forward_fill)
         return redirect(url_for("classify_step"))
     automap = detect.auto_map(j["headers"])
+    counts = j.get("sheet_counts", {})
+    combined = [(sn, counts.get(sn, 0)) for sn in j.get("selected_sheets", [])]
     return render_template("map.html", headers=j["headers"],
                            fields=mapping.CANONICAL_FIELDS, required=mapping.REQUIRED,
                            asset_types=sorted(compute.ASSET_TYPES),
-                           automap=automap, ff_suggest=_suggest_forward_fill(j, automap))
+                           automap=automap, ff_suggest=_suggest_forward_fill(j, automap),
+                           combined=combined)
 
 
 @app.route("/classify", methods=["GET", "POST"])

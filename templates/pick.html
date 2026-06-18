@@ -1,35 +1,39 @@
-{% extends "base.html" %}{% block step %}2 · sheet & header{% endblock %}
+{% extends "base.html" %}{% block step %}2 · sheets & headers{% endblock %}
 {% block body %}
-<h2>Pick the sheet and the header row</h2>
-<p class="sub">{{filename}} — we scanned every sheet and pre-selected the one that
-looks like lot-level data, plus its header row. <span class="pill trusted">recommended</span>
-is our best guess; change it if it's wrong.</p>
+<p class="note"><a href="{{url_for('home')}}">← main menu</a></p>
+<h2>Pick the sheet(s) and header row</h2>
+<p class="sub">{{filename}} — tick <b>every</b> sheet that holds gains. If the file
+splits short-term and long-term (or one sheet per account) across sheets, tick
+them all and they're combined into one run. <span class="pill trusted">recommended</span>
+sheets are pre-ticked; the green row is each sheet's detected header.</p>
 <form action="{{url_for('pick')}}" method="post">
 {% for sn, rows in preview.items() %}
 {% set r = ranked.get(sn) %}
-<div class="card" {% if sn==recommend %}style="border-color:var(--ok);border-width:2px"{% endif %}>
-  <label class="fld"><b>Sheet</b>
-    <label><input type="radio" name="sheet" value="{{sn}}" {% if sn==recommend %}checked{% endif %}> {{sn}}</label>
+{% set checked = autocheck.get(sn) %}
+{% set hdr = sheet_hdr.get(sn) %}
+<div class="card" {% if checked %}style="border-color:var(--ok)"{% endif %}>
+  <label class="fld" style="margin-bottom:6px">
+    <input type="checkbox" name="sheets" value="{{sn}}" style="width:auto" {% if checked %}checked{% endif %}>
+    <b style="display:inline">{{sn}}</b>
     {% if sn==recommend %}<span class="pill trusted">recommended</span>{% endif %}
-    {% if r and r.req %}<span class="note">— {{r.reason}}</span>
-    {% elif r %}<span class="note">— {{r.reason}}</span>{% endif %}
+    {% if r %}<span class="note">— {{r.reason}}</span>{% endif %}
   </label>
   <div class="scroll"><table>
     <tr><th>use as header</th>{% for c in range(rows[0]|length) %}<th>{{loop.index0}}</th>{% endfor %}</tr>
     {% for row in rows %}
-    {% set is_hdr = (sn==recommend and loop.index0==rec_header) %}
+    {% set is_hdr = (hdr is not none and loop.index0==hdr) %}
     <tr {% if is_hdr %}style="background:#e6f4ea"{% endif %}>
-      <td><input type="radio" name="header_row" value="{{loop.index0}}"
-                 {% if is_hdr or (rec_header is none and loop.index0==0) %}checked{% endif %}></td>
+      <td><input type="radio" name="header_row_{{sn}}" value="{{loop.index0}}"
+                 {% if is_hdr or (hdr is none and loop.index0==0) %}checked{% endif %}></td>
       {% for c in row %}<td>{{c[:24]}}</td>{% endfor %}
     </tr>
     {% endfor %}
   </table></div>
 </div>
 {% endfor %}
-<button class="btn" type="submit">Use this header →</button>
+<button class="btn" type="submit">Use these →</button>
 </form>
-<p class="note">The green row is the detected header for the recommended sheet.
-Header-row radios are shared across the preview; if you switch sheets, click the
-row index that holds the column names in that sheet.</p>
+<p class="note">Combined sheets must share the same column order (true for
+short-term/long-term or per-account splits from one broker). Each sheet keeps its
+own header row, so they can sit at different positions.</p>
 {% endblock %}
