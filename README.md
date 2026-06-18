@@ -12,7 +12,15 @@ filing rests with the preparer.
 ## Run (Mac)
 
 Double-click `run.command`. First launch builds a venv and installs deps, then
-opens http://127.0.0.1:5000. Or manually:
+opens http://127.0.0.1:5000.
+
+## Run (Windows)
+
+Double-click `run.bat`. Same behaviour: first launch builds `.venv`, installs
+deps, then opens http://127.0.0.1:5000. Needs Python 3 on PATH (install from
+python.org and tick "Add python.exe to PATH").
+
+## Run (manual, any OS)
 
 ```
 pip install -r requirements.txt
@@ -20,6 +28,8 @@ python app.py
 ```
 
 Outputs are written to `~/Downloads/cg-engine-out/` (override with `CG_OUT`).
+The Flask templates live in `templates/`; the ISIN classification DB
+(`isin_master.db`) sits beside the code (override path with `ISIN_DB_PATH`).
 
 ## The flow
 
