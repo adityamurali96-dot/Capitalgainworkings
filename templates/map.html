@@ -1,22 +1,36 @@
 {% extends "base.html" %}{% block step %}3 · map & declare{% endblock %}
 {% block body %}
 <h2>Map columns &amp; declare the source</h2>
-<p class="sub">Map each canonical field to a source column. <span class="req">*</span> = required. Then declare the facts the engine must not guess.</p>
+{% set matched = automap|length %}
+<p class="sub">We auto-matched <b>{{matched}}</b> of {{fields|length}} columns from the
+header names. <span class="req">*</span> = required. Review the pre-filled picks
+(green = confident, amber = low-confidence guess), fix any that are wrong, then
+declare the facts the engine must not guess.</p>
 <form action="{{url_for('mapping_step')}}" method="post">
 
 <div class="card">
   <h3 style="margin-top:0">Column mapping</h3>
   <div class="grid">
   {% for f in fields %}
-    <label class="fld"><b>{{f}}{% if f in required %} <span class="req">*</span>{% endif %}</b>
+    {% set guess = automap.get(f) %}
+    <label class="fld"><b>{{f}}{% if f in required %} <span class="req">*</span>{% endif %}
+      {% if guess and guess.confidence=='high' %}<span class="pill trusted">auto</span>
+      {% elif guess %}<span class="pill proposed">check</span>
+      {% elif f in required %}<span class="pill manual">set it</span>{% endif %}</b>
       <select name="map_{{f}}">
         <option value="">— not present —</option>
-        {% for h in headers %}<option value="{{h}}">{{h}}</option>{% endfor %}
+        {% for h in headers %}<option value="{{h}}" {% if guess and guess.header==h %}selected{% endif %}>{{h}}</option>{% endfor %}
       </select>
     </label>
   {% endfor %}
   </div>
   <p class="note">ISIN is also auto-parsed from the security name if embedded (e.g. <i>ICICI Bank Ltd-INE090A01021</i>).</p>
+  <label class="fld" style="margin-top:8px">
+    <input type="checkbox" name="forward_fill" value="yes" style="width:auto" {% if ff_suggest %}checked{% endif %}>
+    <b style="display:inline">Carry security name / ISIN down onto the rows below</b>
+    <span class="note">— for grouped layouts that print the scrip once and leave the
+    lot rows beneath it blank (e.g. IIFL).{% if ff_suggest %} <b>Suggested for this file.</b>{% endif %}</span>
+  </label>
 </div>
 
 <div class="card">

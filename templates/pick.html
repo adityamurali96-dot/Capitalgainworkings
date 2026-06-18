@@ -1,19 +1,27 @@
 {% extends "base.html" %}{% block step %}2 · sheet & header{% endblock %}
 {% block body %}
 <h2>Pick the sheet and the header row</h2>
-<p class="sub">{{filename}} — broker files often carry client-info rows above the real header. Click the row that holds the column names.</p>
+<p class="sub">{{filename}} — we scanned every sheet and pre-selected the one that
+looks like lot-level data, plus its header row. <span class="pill trusted">recommended</span>
+is our best guess; change it if it's wrong.</p>
 <form action="{{url_for('pick')}}" method="post">
 {% for sn, rows in preview.items() %}
-<div class="card">
+{% set r = ranked.get(sn) %}
+<div class="card" {% if sn==recommend %}style="border-color:var(--ok);border-width:2px"{% endif %}>
   <label class="fld"><b>Sheet</b>
-    <label><input type="radio" name="sheet" value="{{sn}}" {% if loop.first %}checked{% endif %}> {{sn}}</label>
+    <label><input type="radio" name="sheet" value="{{sn}}" {% if sn==recommend %}checked{% endif %}> {{sn}}</label>
+    {% if sn==recommend %}<span class="pill trusted">recommended</span>{% endif %}
+    {% if r and r.req %}<span class="note">— {{r.reason}}</span>
+    {% elif r %}<span class="note">— {{r.reason}}</span>{% endif %}
   </label>
   <div class="scroll"><table>
     <tr><th>use as header</th>{% for c in range(rows[0]|length) %}<th>{{loop.index0}}</th>{% endfor %}</tr>
-    {% for r in rows %}
-    <tr>
-      <td><input type="radio" name="header_row" value="{{loop.index0}}" {% if loop.index0==0 %}checked{% endif %}></td>
-      {% for c in r %}<td>{{c[:24]}}</td>{% endfor %}
+    {% for row in rows %}
+    {% set is_hdr = (sn==recommend and loop.index0==rec_header) %}
+    <tr {% if is_hdr %}style="background:#e6f4ea"{% endif %}>
+      <td><input type="radio" name="header_row" value="{{loop.index0}}"
+                 {% if is_hdr or (rec_header is none and loop.index0==0) %}checked{% endif %}></td>
+      {% for c in row %}<td>{{c[:24]}}</td>{% endfor %}
     </tr>
     {% endfor %}
   </table></div>
@@ -21,5 +29,7 @@
 {% endfor %}
 <button class="btn" type="submit">Use this header →</button>
 </form>
-<p class="note">Header-row radios are shared across the preview; pick the row index that matches your chosen sheet.</p>
+<p class="note">The green row is the detected header for the recommended sheet.
+Header-row radios are shared across the preview; if you switch sheets, click the
+row index that holds the column names in that sheet.</p>
 {% endblock %}
