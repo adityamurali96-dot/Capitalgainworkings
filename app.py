@@ -14,9 +14,10 @@ from flask import (Flask, request, render_template, redirect, url_for,
                    session, send_file, flash)
 import pandas as pd
 
-import compute, mapping, isin_db, detect
+import compute, mapping, isin_db, detect, reco
 from writer_summary import write_summary
 from writer_winman import write_winman
+from writer_reco import write_reco
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("CG_SECRET", "cg-engine-local-dev")
@@ -93,8 +94,67 @@ def _finalise_rows(j: dict, m: dict, forward_fill: bool) -> list[dict]:
     return kept
 
 
+def _extract_records(file_storage):
+    """Read a file for reconciliation: auto-pick the data sheet + header row,
+    auto-map columns, and return (clean dict rows, automap, info). Reuses the
+    same detection + blank/divider handling as the CG flow, plus a forward-fill
+    for grouped layouts. No mapping UI — reconciliation is a fast, automatic pass."""
+    sheets = _read_any(file_storage, header_row=None)
+    cleaned = {}
+    for k, v in sheets.items():
+        rows = v.fillna("").astype(str).values.tolist()
+        rows, _ = detect.drop_blank_columns(rows)
+        cleaned[k] = rows
+    ranked = detect.rank_sheets(cleaned)
+    top = ranked[0] if ranked else None
+    info = {"sheet": None, "header_row": None, "n": 0}
+    if not top or top["header_row"] is None:
+        return [], {}, info
+    sheet, hr = top["name"], top["header_row"]
+    rows = cleaned[sheet]
+    seen, clean = {}, []
+    for i, h in enumerate(str(x).strip() for x in rows[hr]):
+        h = h or f"col{i+1}"
+        if h in seen:
+            seen[h] += 1; h = f"{h}.{seen[h]}"
+        else:
+            seen[h] = 0
+        clean.append(h)
+    automap = detect.auto_map(clean)
+    below = [dict(zip(clean, r)) for r in rows[hr + 1:] if any(str(c).strip() for c in r)]
+    name_c = automap.get("security_name", {}).get("header")
+    isin_c = automap.get("isin", {}).get("header")
+    val_c = automap.get("sale_consideration", {}).get("header")
+    if name_c and val_c:  # grouped layout? carry name/ISIN down onto the lot rows
+        nfill = sum(1 for r in below if str(r.get(name_c, "")).strip())
+        vfill = sum(1 for r in below if str(r.get(val_c, "")).strip())
+        if vfill and nfill < 0.6 * vfill:
+            detect.forward_fill_cols(below, [c for c in (name_c, isin_c) if c])
+    out = []
+    for r in below:
+        if detect.is_repeat_header(list(r.values()), clean):
+            continue
+        if name_c and detect.is_junk_label(r.get(name_c, "")):
+            continue
+        out.append(r)
+    info = {"sheet": sheet, "header_row": hr, "n": len(out), "automap": automap}
+    return out, automap, info
+
+
+def _reco_cols(automap):
+    g = lambda f: automap.get(f, {}).get("header")
+    return g("security_name"), g("isin"), g("sale_consideration"), g("quantity")
+
+
 @app.route("/")
 def home():
+    session.pop("jid", None)
+    return render_template("menu.html", db_status=isin_db.db_status())
+
+
+@app.route("/cg")
+def cg_home():
+    """Entry to the Capital Gain Summary flow (upload -> pick -> map -> compute)."""
     session.pop("jid", None)
     return render_template("upload.html", db_status=isin_db.db_status())
 
@@ -268,6 +328,64 @@ def download(which):
     path = os.path.join(OUT_DIR, fn)
     if not os.path.exists(path):
         flash("File not found — re-run."); return redirect(url_for("home"))
+    return send_file(path, as_attachment=True, download_name=fn)
+
+
+# ---- AIS reconciliation (the second main-menu path) ----------------------
+
+@app.route("/ais", methods=["GET", "POST"])
+def ais():
+    if request.method == "GET":
+        session.pop("jid", None)
+        return render_template("ais_upload.html")
+    j = job()
+    cg_f = request.files.get("cg_file")
+    ais_f = request.files.get("ais_file")
+    if not cg_f or not cg_f.filename or not ais_f or not ais_f.filename:
+        flash("Upload both files — the capital-gains/broker file and the AIS file.")
+        return redirect(url_for("ais"))
+    try:
+        cg_rows, cg_map, cg_info = _extract_records(cg_f)
+        ais_rows, ais_map, ais_info = _extract_records(ais_f)
+    except Exception as e:
+        flash(f"Could not read a file: {e}"); return redirect(url_for("ais"))
+
+    # both sides must yield a sale-value column and at least one key (ISIN/name)
+    problems = []
+    for tag, mp in (("capital-gains/broker", cg_map), ("AIS", ais_map)):
+        if "sale_consideration" not in mp:
+            problems.append(f"no sale-value column found in the {tag} file")
+        if "isin" not in mp and "security_name" not in mp:
+            problems.append(f"no ISIN or security-name column found in the {tag} file")
+    if problems:
+        for p in problems:
+            flash(p)
+        return redirect(url_for("ais"))
+
+    cg_agg = reco.aggregate(cg_rows, *_reco_cols(cg_map))
+    ais_agg = reco.aggregate(ais_rows, *_reco_cols(ais_map))
+    result = reco.reconcile(cg_agg, ais_agg)
+
+    cg_label = os.path.splitext(cg_f.filename)[0][:24]
+    ais_label = os.path.splitext(ais_f.filename)[0][:24]
+    base = "".join(c for c in cg_label if c.isalnum() or c in " _-").strip() or "reco"
+    rfile = os.path.join(OUT_DIR, f"{base}_AIS_Reco.xlsx")
+    write_reco(result, rfile, cg_label=cg_label, ais_label=ais_label)
+    j["reco_file"] = os.path.basename(rfile)
+    return render_template("ais_result.html", result=result,
+                           counts=result.counts(), totals=result.totals(),
+                           cg_info=cg_info, ais_info=ais_info,
+                           cg_label=cg_label, ais_label=ais_label,
+                           reco_file=os.path.basename(rfile), out_dir=OUT_DIR)
+
+
+@app.route("/ais/download")
+def ais_download():
+    j = job()
+    fn = j.get("reco_file")
+    path = os.path.join(OUT_DIR, fn) if fn else None
+    if not path or not os.path.exists(path):
+        flash("File not found — re-run the reconciliation."); return redirect(url_for("ais"))
     return send_file(path, as_attachment=True, download_name=fn)
 
 

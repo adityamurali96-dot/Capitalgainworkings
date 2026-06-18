@@ -1,0 +1,77 @@
+{% extends "base.html" %}{% block step %}AIS reco · result{% endblock %}
+{% block body %}
+<h2>AIS Reconciliation — result</h2>
+<p class="sub">
+  <b>{{cg_label}}</b> ({{cg_info.n}} rows from sheet <span class="mono">{{cg_info.sheet}}</span>)
+  ⟷ <b>{{ais_label}}</b> ({{ais_info.n}} rows from sheet <span class="mono">{{ais_info.sheet}}</span>).
+  Matched within tolerance ₹{{ '%.0f'|format(result.tol_abs) }} or {{ '%.1f'|format(result.tol_pct*100) }}%.
+</p>
+
+<div class="card">
+  <div class="grid" style="grid-template-columns:repeat(4,1fr)">
+    <div><div class="kpi mono">{{counts.matched}}</div><span class="pill trusted">matched</span></div>
+    <div><div class="kpi mono">{{counts.mismatched}}</div><span class="pill proposed">mismatched</span></div>
+    <div><div class="kpi mono">{{counts.only_cg}}</div><span class="pill manual">only in CG</span></div>
+    <div><div class="kpi mono">{{counts.only_ais}}</div><span class="pill manual">only in AIS</span></div>
+  </div>
+  <p class="note" style="margin-top:14px">
+    Total sale value — CG <b class="mono">{{ '{:,.0f}'.format(totals.cg) }}</b> &nbsp;·&nbsp;
+    AIS <b class="mono">{{ '{:,.0f}'.format(totals.ais) }}</b> &nbsp;·&nbsp;
+    net delta (CG − AIS) <b class="mono">{{ '{:,.0f}'.format(totals.delta) }}</b></p>
+  <p style="margin-bottom:0"><a class="btn" href="{{url_for('ais_download')}}">⬇ Download reconciliation (xlsx)</a>
+    <a class="btn alt" href="{{url_for('ais')}}">Reconcile another pair</a></p>
+</div>
+
+{% macro pair_table(rows, kind) %}
+<div class="scroll"><table>
+  <tr><th>Security</th><th>ISIN</th><th class="right">CG value</th><th class="right">AIS value</th>
+      <th class="right">Delta (CG−AIS)</th><th class="right">CG / AIS rows</th></tr>
+  {% for p in rows %}
+  <tr>
+    <td>{{p.name[:46]}}</td><td class="mono">{{p.isin}}</td>
+    <td class="right mono">{{ '{:,.0f}'.format(p.cg_value) }}</td>
+    <td class="right mono">{{ '{:,.0f}'.format(p.ais_value) }}</td>
+    <td class="right mono">{{ '{:,.0f}'.format(p.delta) }}</td>
+    <td class="right mono">{{p.cg_n}} / {{p.ais_n}}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% endmacro %}
+
+{% macro side_table(rows) %}
+<div class="scroll"><table>
+  <tr><th>Security</th><th>ISIN</th><th class="right">Sale value</th><th class="right">Qty</th><th class="right">Rows</th></tr>
+  {% for s in rows %}
+  <tr>
+    <td>{{s.name[:46]}}</td><td class="mono">{{s.isin}}</td>
+    <td class="right mono">{{ '{:,.0f}'.format(s.value) }}</td>
+    <td class="right mono">{{ '{:,.2f}'.format(s.qty) }}</td>
+    <td class="right mono">{{s.n}}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% endmacro %}
+
+{% if result.mismatched %}
+<div class="card"><h3 style="margin-top:0">Mismatched <span class="pill proposed">{{counts.mismatched}}</span>
+  <span class="note">— same security, sale value differs</span></h3>
+  {{ pair_table(result.mismatched, 'mismatch') }}</div>
+{% endif %}
+
+{% if result.only_cg %}
+<div class="card"><h3 style="margin-top:0">Only in CG / broker <span class="pill manual">{{counts.only_cg}}</span>
+  <span class="note">— present in your file, not in AIS</span></h3>
+  {{ side_table(result.only_cg) }}</div>
+{% endif %}
+
+{% if result.only_ais %}
+<div class="card"><h3 style="margin-top:0">Only in AIS <span class="pill manual">{{counts.only_ais}}</span>
+  <span class="note">— in AIS, not in your file (a sale you may have missed)</span></h3>
+  {{ side_table(result.only_ais) }}</div>
+{% endif %}
+
+{% if result.matched %}
+<div class="card"><h3 style="margin-top:0">Matched <span class="pill trusted">{{counts.matched}}</span></h3>
+  {{ pair_table(result.matched, 'matched') }}</div>
+{% endif %}
+{% endblock %}

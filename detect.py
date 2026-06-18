@@ -39,6 +39,7 @@ SYNONYMS: dict[str, list[str]] = {
     "security_name": [
         "security name", "scrip name", "script name", "stock name", "stock symbol",
         "asset name", "scheme name", "fund name", "company name", "particulars",
+        "name of security", "name of the security", "name of the asset",
         "scheme", "security", "symbol", "name of the company", "instrument",
     ],
     "isin": ["isin no", "isin number", "isin code", "isin"],
@@ -62,7 +63,8 @@ SYNONYMS: dict[str, list[str]] = {
     "sale_consideration": [
         "sale value", "sell value", "sale amount", "sale consideration", "sale amt",
         "sell amt", "full value of consideration", "full value", "redemption amount",
-        "sale proceeds", "net value", "amount",
+        "sale proceeds", "net value", "transaction value", "reported value",
+        "total sale value", "amount",
     ],
     "transfer_expenses": [
         "sale expenses", "sell charges", "transfer expenses", "sale charges",
