@@ -1,0 +1,30 @@
+{% extends "base.html" %}{% block step %}start{% endblock %}
+{% block body %}
+<h2>What do you want to do?</h2>
+<p class="sub">Two independent tools. Pick one — you can come back and run the other anytime.</p>
+
+<div class="grid">
+  <div class="card">
+    <h3 style="margin-top:0">Capital Gain Summary</h3>
+    <p class="note">Upload one broker / AMC statement → auto-map the columns →
+    classify → compute. Produces <b>Output A</b> (CG Summary + Workings + COI)
+    and <b>Output B</b> (Winman import).</p>
+    <p style="margin-bottom:0"><a class="btn" href="{{url_for('cg_home')}}">Capital Gain Summary →</a></p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">AIS Reconciliation</h3>
+    <p class="note">Upload your capital-gains / broker file <b>and</b> the AIS
+    statement. Columns are auto-detected; sale values are matched per security
+    (ISIN, then name) to show <b>matched · mismatched · only-in-CG · only-in-AIS</b>.</p>
+    <p style="margin-bottom:0"><a class="btn" href="{{url_for('ais')}}">AIS Reconciliation →</a></p>
+  </div>
+</div>
+
+<div class="disc">
+This tool assists computation and reconciliation. It surfaces the basis for every
+figure so you can verify it. Final responsibility for the figures and the filing
+rests with the preparer.
+<br><span class="note">ISIN classification DB: {{db_status}}</span>
+</div>
+{% endblock %}

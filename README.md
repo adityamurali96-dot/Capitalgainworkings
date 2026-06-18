@@ -1,9 +1,14 @@
 # cg-engine
 
-Map once → classify → compute deterministically → two writers. One canonical
-table feeds both the firm CG Summary (Output A) and the Winman import file
-(Output B). The AIS reconciliation is a separate downstream step that consumes
-either output.
+Two tools behind one menu (pick one at the start screen):
+
+1. **Capital Gain Summary** — map once → classify → compute deterministically →
+   two writers. One canonical table feeds both the firm CG Summary (Output A) and
+   the Winman import file (Output B).
+2. **AIS Reconciliation** — upload a capital-gains/broker file **and** the AIS
+   statement; columns are auto-detected and sale values are matched per security
+   to surface matched / mismatched / only-in-CG / only-in-AIS. Standalone — it
+   does not require running the summary first.
 
 This is a tool. It surfaces the classification basis and the full gain logic for
 every row so the preparer can verify them. Responsibility for the figures and the
@@ -79,6 +84,20 @@ The Flask templates live in `templates/`; the ISIN classification DB
   your Winman build accepts xlsx). Lot-level with ISIN, sale date, sale
   consideration and quantity intact, so the AIS reco can consume it.
 
+## AIS Reconciliation (the second menu path)
+
+Upload two files — the capital-gains/broker file and the AIS statement. Both are
+auto-detected with the same `detect.py` engine (sheet, header row, columns), then
+reduced to **sale value per security** and matched:
+
+- **key**: valid ISIN first; a name-only side is rescued by normalised name.
+- **tolerance**: matched if values agree within ₹1 or 1% (absorbs AIS rounding).
+- **buckets**: matched · mismatched (chase the delta) · only-in-CG · only-in-AIS
+  (a sale that may be missing from your file). On-screen plus a downloadable
+  `*_AIS_Reco.xlsx` (Reco Summary + a sheet per bucket).
+
+No tax logic — `reco.py` only sums and compares; the preparer judges every delta.
+
 ## Where the logic lives (and what to tweak)
 
 - `compute.py` — the deterministic core, **zero I/O**. 23-Jul-2024 split,
@@ -90,6 +109,10 @@ The Flask templates live in `templates/`; the ISIN classification DB
   dropping its header aliases into `SYNONYMS` — no other change. Every guess is
   shown with confidence on the map screen and is overridable; nothing routes
   silently.
+- `reco.py` — the AIS reconciliation engine, **zero I/O**. Per-security
+  aggregation, ISIN/name keying, tolerance match into the four buckets.
+  `writer_reco.py` renders the workbook. Tune the match tolerance in
+  `reco.reconcile` (`tol_abs`, `tol_pct`).
 - `tests/test_compute.py` — hand-checked. Run `python tests/test_compute.py`.
   Includes the proof that FMV is suppressed when cost is already grandfathered.
 - `tests/test_detect.py` — unit tests for the matcher, plus a corpus test that

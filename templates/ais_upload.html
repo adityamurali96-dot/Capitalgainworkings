@@ -1,0 +1,27 @@
+{% extends "base.html" %}{% block step %}AIS reco · upload{% endblock %}
+{% block body %}
+<p class="note"><a href="{{url_for('home')}}">← main menu</a></p>
+<h2>AIS Reconciliation</h2>
+<p class="sub">Upload both files. Columns are auto-detected — no mapping step.
+Sale values are totalled per security and matched (ISIN first, then name).</p>
+
+<div class="card">
+  <form action="{{url_for('ais')}}" method="post" enctype="multipart/form-data">
+    <label class="fld"><b>Capital-gains / broker file</b>
+      <input type="file" name="cg_file" accept=".xlsx,.xls,.csv,.tsv" required>
+      <span class="note">The same kind of statement you'd feed to Capital Gain Summary (Zerodha, Groww, CAMS, …).</span>
+    </label>
+    <label class="fld"><b>AIS file</b>
+      <input type="file" name="ais_file" accept=".xlsx,.xls,.csv,.tsv" required>
+      <span class="note">The AIS "Sale of securities and units of mutual fund" export (xlsx / xls / csv).</span>
+    </label>
+    <p style="margin-bottom:0"><button class="btn" type="submit">Reconcile →</button></p>
+  </form>
+</div>
+
+<div class="disc">
+Reconciliation compares <b>sale value per security</b> on each side. A security
+with an ISIN on one side and only a name on the other is matched by normalised
+name. Quarters/lots are summed; the preparer judges every delta.
+</div>
+{% endblock %}
