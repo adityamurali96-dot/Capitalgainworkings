@@ -84,6 +84,23 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
     cost = parse_amount(g("purchase_cost"))
     sale = parse_amount(g("sale_consideration"))
     qty = parse_amount(g("quantity"))
+    fmv = parse_amount(g("fmv_31jan2018"))
+
+    # Grandfathering basis. Under "fmv" the acquisition date may be absent (many
+    # broker statements drop it for grandfathered pre-2018 holdings and give only
+    # the 31-Jan-2018 FMV). When it is, the FMV decides:
+    #   FMV present -> pre-2018 grandfathered lot, long-term  (infer acq 31-Jan-2018)
+    #   no FMV       -> holding period unknown, treated as SHORT TERM (warned)
+    acq_inferred, acq_note = False, ""
+    if acq is None and decl.get("grandfathering_basis", "by_date") == "fmv" and xfer is not None:
+        if fmv is not None and fmv != 0:
+            acq = date(2018, 1, 31)          # < 01-Feb-2018 cutoff -> grandfathering eligible
+            acq_inferred = True
+            acq_note = "acq date absent; 31-Jan-2018 FMV present -> treated as pre-2018 grandfathered long-term"
+        else:
+            acq = xfer                       # zero holding -> short term
+            acq_inferred = True
+            acq_note = "acq date and 31-Jan-2018 FMV both absent -> treated as SHORT TERM (holding period unknown)"
     isin = g("isin")
     isin = str(isin).strip().upper() if isin else None
     if isin and not re.fullmatch(r"[A-Z0-9]{12}", isin):
@@ -95,7 +112,6 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
         if m:
             isin = m.group(1)
     exp = parse_amount(g("transfer_expenses")) or 0.0
-    fmv = parse_amount(g("fmv_31jan2018"))
 
     cls = classification or {}
     asset_type = cls.get("asset_type") or decl.get("default_asset_type")
@@ -123,6 +139,7 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
             source_label=decl.get("source_label", ""),
             classification_basis=cls.get("basis", "declared (per-source default)"),
             classification_confidence=cls.get("confidence", "declared"),
+            acq_inferred=acq_inferred, acq_note=acq_note,
         )
         return tx, None
     except ValueError as e:

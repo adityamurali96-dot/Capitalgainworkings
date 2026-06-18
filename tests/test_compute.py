@@ -68,6 +68,31 @@ def test_grandfathering_suppressed_when_cost_already_grandfathered():
     assert any("FMV present but ignored" in f for f in r.flags)
 
 
+def test_fmv_inferred_acq_is_long_term_and_grandfathered():
+    # FMV-basis: acquisition date absent but FMV present -> mapping infers a
+    # pre-2018 acq date (31-Jan-2018), so the lot is long-term and grandfathered.
+    r = compute_row(_tx(acquisition_date=date(2018, 1, 31), purchase_cost=100.0,
+                        sale_consideration=1000.0, quantity=10, fmv_31jan2018=50.0,
+                        fmv_basis="per_unit", cost_basis_meaning="raw",
+                        acq_inferred=True,
+                        acq_note="acq date absent; 31-Jan-2018 FMV present -> grandfathered"))
+    assert r.is_ltcg is True
+    assert r.grandfathering_applied is True
+    assert r.cost_used == 500.0
+    assert any("grandfathered" in f for f in r.flags)
+
+
+def test_fmv_missing_inferred_acq_is_short_term_and_flagged():
+    # FMV-basis: neither acq date nor FMV -> mapping infers acq = transfer date,
+    # giving zero holding -> short term, with the warning carried into flags.
+    r = compute_row(_tx(acquisition_date=date(2024, 8, 1), transfer_date=date(2024, 8, 1),
+                        acq_inferred=True,
+                        acq_note="acq date and 31-Jan-2018 FMV both absent -> treated as SHORT TERM"))
+    assert r.is_ltcg is False
+    assert r.section == "111A"
+    assert any("SHORT TERM" in f for f in r.flags)
+
+
 def test_50aa_debt_is_always_short_term():
     # 50AA: STCG regardless of holding period (held > 4 years here)
     r = compute_row(_tx(asset_type="mf_debt", is_50aa=True, stt_paid=False,

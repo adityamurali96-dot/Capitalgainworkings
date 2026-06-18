@@ -70,7 +70,9 @@ def _finalise_rows(j: dict, m: dict, forward_fill: bool) -> list[dict]:
     forward-fill grouped name/ISIN, then drop section-divider, total/footnote and
     repeated-header rows. The skipped count is stashed for the next screen."""
     headers = j["headers"]
-    rows = [dict(zip(headers, r)) for r in j.get("rows_below", [])]
+    raw_rows = j.get("rows_below", [])
+    raw_sheets = j.get("row_sheets", [None] * len(raw_rows))
+    rows = [dict(zip(headers, r)) for r in raw_rows]
     if forward_fill:
         ff_cols = [m[f] for f in ("security_name", "isin") if m.get(f)]
         if ff_cols:
@@ -78,8 +80,8 @@ def _finalise_rows(j: dict, m: dict, forward_fill: bool) -> list[dict]:
     name_c = m.get("security_name")
     date_c = m.get("transfer_date")
     sale_c = m.get("sale_consideration")
-    kept, skipped = [], 0
-    for r in rows:
+    kept, kept_sheets, skipped = [], [], 0
+    for r, sn in zip(rows, raw_sheets):
         if detect.is_repeat_header(list(r.values()), headers):
             skipped += 1; continue
         if name_c and detect.is_junk_label(r.get(name_c, "")):
@@ -89,8 +91,9 @@ def _finalise_rows(j: dict, m: dict, forward_fill: bool) -> list[dict]:
                    (sale_c and str(r.get(sale_c, "")).strip())
         if not has_sale:
             skipped += 1; continue
-        kept.append(r)
+        kept.append(r); kept_sheets.append(sn)
     j["skipped"] = skipped
+    j["data_sheets"] = kept_sheets    # sheet of origin per kept row (multi-sheet runs)
     return kept
 
 
@@ -216,14 +219,18 @@ def pick():
         # combine: every selected sheet's rows, position-aligned to the unified
         # width (same column order across ST/LT or per-account splits). Different
         # header text/case across sheets is irrelevant — mapping is on `unified`.
-        per_sheet = {sn: detect.combine_aligned([(j["sheets"][sn], hdr_of[sn])], width)
-                     for sn in selected}
-        combined = [r for sn in selected for r in per_sheet[sn]]
-        per_sheet = {sn: len(rows) for sn, rows in per_sheet.items()}
+        per_sheet_rows = {sn: detect.combine_aligned([(j["sheets"][sn], hdr_of[sn])], width)
+                          for sn in selected}
+        combined = [r for sn in selected for r in per_sheet_rows[sn]]
+        # parallel list: which sheet each combined row came from, so the classify
+        # screen can group line items under their sheet (e.g. "Sheet 1 — Short term").
+        row_sheets = [sn for sn in selected for _ in per_sheet_rows[sn]]
+        sheet_counts = {sn: len(rows) for sn, rows in per_sheet_rows.items()}
         j["headers"] = unified
         j["rows_below"] = combined
+        j["row_sheets"] = row_sheets
         j["selected_sheets"] = selected
-        j["sheet_counts"] = per_sheet
+        j["sheet_counts"] = sheet_counts
         return redirect(url_for("mapping_step"))
 
     # GET: preview deep enough to reach each detected header; flag the sheets that
@@ -262,6 +269,7 @@ def mapping_step():
             "default_stt_paid": request.form.get("default_stt_paid") == "yes",
             "default_is_50aa": request.form.get("default_is_50aa") == "yes",
             "fmv_basis": request.form.get("fmv_basis", "per_unit"),
+            "grandfathering_basis": request.form.get("grandfathering_basis", "by_date"),
         }
         forward_fill = request.form.get("forward_fill") == "yes"
         j["mapping"] = m; j["decl"] = decl
@@ -300,7 +308,11 @@ def classify_step():
         return redirect(url_for("result"))
 
     # GET: pre-fill via DB, build the review table
-    rows = []
+    gf_basis = decl.get("grandfathering_basis", "by_date")
+    fmv_col = m.get("fmv_31jan2018")
+    data_sheets = j.get("data_sheets", [])
+    multi_sheet = len(j.get("selected_sheets", [])) > 1
+    rows, gf_warn_n = [], 0
     for i, row in enumerate(data):
         # peek name/isin using the mapping
         name = row.get(m.get("security_name") or "", "")
@@ -313,17 +325,33 @@ def classify_step():
         acq = mapping.parse_date(row.get(m.get("acquisition_date") or ""))
         prop50 = bool(debt and acq and acq.toordinal() >= mapping.parse_date("2023-04-01").toordinal())
         stt_default = decl.get("default_stt_paid", at in ("equity", "eof", "business_trust"))
+        # grandfathering note when the acquisition date is absent (FMV-basis mode)
+        gf_note, gf_warn = "", False
+        if acq is None and gf_basis == "fmv":
+            fmv_val = mapping.parse_amount(row.get(fmv_col, "")) if fmv_col else None
+            if fmv_val:
+                gf_note = "no acq date · 31-Jan-2018 FMV present → grandfathered long-term"
+            else:
+                gf_note, gf_warn = "no acq date & no FMV → treated as SHORT TERM", True
+                gf_warn_n += 1
         rows.append({
             "i": i, "name": name[:60], "isin": isin,
             "asset_type": at or "", "confidence": look["confidence"],
             "basis": look["basis"] or decl.get("cost_basis_meaning", ""),
             "reason": look["reason"], "is_debt": debt,
             "prop50": prop50, "stt": stt_default,
+            "sheet": data_sheets[i] if i < len(data_sheets) else None,
+            "gf_note": gf_note, "gf_warn": gf_warn,
         })
+    if gf_warn_n:
+        flash(f"{gf_warn_n} row(s) have no acquisition date and no 31-Jan-2018 FMV — "
+              f"they will be treated as SHORT TERM. Map the FMV column or key in the "
+              f"acquisition date if that is wrong.")
     j["prefill"] = rows
     return render_template("classify.html", rows=rows,
                            asset_types=sorted(compute.ASSET_TYPES),
-                           decl=decl, skipped=j.get("skipped", 0))
+                           decl=decl, skipped=j.get("skipped", 0),
+                           multi_sheet=multi_sheet)
 
 
 @app.route("/result")

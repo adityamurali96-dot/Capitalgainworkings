@@ -51,6 +51,13 @@ The Flask templates live in `templates/`; the ISIN classification DB
    - `cost_basis_meaning` — **raw** (engine grandfathers) vs **already-grandfathered**
      (engine suppresses FMV). This is the highest-risk silent error; it is a
      required choice.
+   - `grandfathering_basis` — **by acquisition date** (default: FMV substituted
+     only for lots acquired before 01-Feb-2018; acquisition date required) vs
+     **FMV-based** (for statements that drop the purchase date on old holdings —
+     a lot with no acquisition date but a 31-Jan-2018 FMV is treated as a
+     pre-2018 grandfathered long-term lot; with no FMV either it is treated as
+     **short-term** and the row is **flagged/flashed** so the preparer can map
+     the buried acquisition-date column or key it in).
    - default asset type (if homogeneous), STT default, 50AA default, FMV basis.
    - **forward-fill name/ISIN** — for grouped layouts that print the scrip once
      and leave the lot rows beneath blank (IIFL); auto-suggested when detected.
@@ -61,6 +68,12 @@ The Flask templates live in `templates/`; the ISIN classification DB
    - 50AA flag shows only for debt rows, pre-filled from acquisition date
      (on/after 01-Apr-2023 → proposed Yes). "Set 50AA = No for all debt" sweep
      reports the count it changed.
+   - when several sheets were combined (ST/LT or per-account splits), the line
+     items are **grouped under a "Sheet: …" divider** so each row's sheet of
+     origin is visible while classifying.
+   - under FMV-based grandfathering, rows missing an acquisition date carry a
+     **GF** note: green (FMV present → grandfathered long-term) or red (no FMV →
+     short-term); a summary warning is flashed for the red ones.
 5. **Compute & download** — Output A and Output B, plus an on-screen logic snapshot.
 
 ## The two outputs
@@ -129,10 +142,14 @@ No tax logic — `reco.py` only sums and compares; the preparer judges every del
 ## Known v1 boundaries
 
 - One source file per run (multi-source consolidation is the next iteration).
-- Aggregated / redemption-only statements that carry no lot-level acquisition
-  date (CAMS & Karvy/KFIN transaction sheets, Kotak's per-scrip Gain & Loss
-  summary) can't be computed lot-by-lot — detection flags the missing required
-  field rather than guessing. Use the AMC/broker's lot-level statement instead.
+- Statements that carry a 31-Jan-2018 FMV but drop the lot-level acquisition
+  date for old holdings (CAMS & Karvy/KFIN transaction sheets) can be computed
+  with **grandfathering basis = FMV-based**: FMV-bearing lots are treated as
+  pre-2018 grandfathered long-term, and lots with neither acquisition date nor
+  FMV fall to short-term with a flashed warning. By default these rows still
+  flag the missing required field rather than being guessed. Purely aggregated /
+  redemption-only summaries (Kotak's per-scrip Gain & Loss) carry no sale date
+  either and still need the AMC/broker's lot-level statement.
 - Foreign securities: pre-convert to INR (excluded from compute by design).
 - `Is it LTCG?` is set explicitly per the Winman skill's dropdown rule, not left
   blank — change in `writer_winman._val` if your build prefers blank.
