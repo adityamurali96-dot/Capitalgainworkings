@@ -116,7 +116,7 @@ def build_validation(results, tol_abs: float = TOL_ABS, tol_pct: float = TOL_PCT
     roll = {"short": [0, 0, 0.0, 0.0], "long": [0, 0, 0.0, 0.0], "total": [0, 0, 0.0, 0.0]}
 
     for r in results:
-        bg = r.tx.broker_gain
+        bg = r.broker_gain_used()   # picks the short/long column for this lot, or the single one
         has = bg is not None
         eng = round(r.gain, 2)
         delta = round(eng - bg, 2) if has else None
@@ -151,7 +151,7 @@ def build_validation(results, tol_abs: float = TOL_ABS, tol_pct: float = TOL_PCT
             "status": _status(nb, es, bs, tol_abs, tol_pct),
         }
     vres.coverage = {"n": len(results),
-                     "n_broker": sum(1 for r in results if r.tx.broker_gain is not None)}
+                     "n_broker": sum(1 for r in results if r.broker_gain_used() is not None)}
     return vres
 
 

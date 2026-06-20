@@ -27,11 +27,14 @@ import re
 
 # canonical fields (kept in sync with mapping.CANONICAL_FIELDS)
 CANONICAL_FIELDS = [
-    "security_name", "acquisition_date", "purchase_cost", "transfer_date",
-    "sale_consideration", "quantity", "isin", "transfer_expenses", "fmv_31jan2018",
-    "broker_gain",
+    "security_name", "acquisition_date", "purchase_cost", "purchase_expenses",
+    "transfer_date", "sale_consideration", "quantity", "isin", "transfer_expenses",
+    "fmv_31jan2018", "broker_stcg", "broker_ltcg", "broker_gain",
 ]
 REQUIRED = ["security_name", "acquisition_date", "purchase_cost", "transfer_date", "sale_consideration"]
+
+# a valid ISIN: 2-letter country code + 9 alphanumerics + 1 check digit.
+ISIN_RE = re.compile(r"\b([A-Z]{2}[A-Z0-9]{9}[0-9])\b")
 
 # Header aliases seen across CAMS, Karvy/KFIN, Zerodha, Groww, ICICI Direct,
 # IIFL, Kotak, MProfit, Valentis, Carnelian and the NSDL/CDSL broker dumps.
@@ -61,6 +64,14 @@ SYNONYMS: dict[str, list[str]] = {
         "original cost amount", "acquisition cost", "purchase amt", "buy amt",
         "total cost", "cost amount", "effective cost", "purchase value", "cost",
     ],
+    # other expenses incurred on the BUY (brokerage / charges). Mapping it opts the
+    # lot in to having these added to the cost of acquisition (see compute._actual_cost).
+    "purchase_expenses": [
+        "purchase expenses", "acquisition expenses", "buy expenses", "purchase charges",
+        "buy charges", "brokerage on purchase", "purchase brokerage", "buy brokerage",
+        "other expenses on acquisition", "acquisition charges", "buy side charges",
+        "expenses on purchase", "expenses on acquisition", "purchase other charges",
+    ],
     "sale_consideration": [
         "sale value", "sell value", "sale amount", "sale consideration", "sale amt",
         "sell amt", "full value of consideration", "full value", "redemption amount",
@@ -69,17 +80,32 @@ SYNONYMS: dict[str, list[str]] = {
     ],
     "transfer_expenses": [
         "sale expenses", "sell charges", "transfer expenses", "sale charges",
-        "brokerage", "expenses",
+        "selling expenses", "sell expenses", "other expenses on sale",
+        "expenses on sale", "sale side charges", "brokerage on sale", "brokerage", "expenses",
     ],
     "fmv_31jan2018": [
         "price as on 31st jan", "price on 31-jan-18", "fmv price on 31",
         "rate as on 31 jan 18", "fmv as on 31", "fair market value", "grandfathered nav",
         "31st jan 2018", "31-jan-2018", "31/01/2018", "31 jan 18", "as on 31",
     ],
-    # the broker's OWN already-computed per-lot gain. Optional (not REQUIRED): it is
-    # never used to compute, only to validate the engine against (see validate.py).
-    # The distinctive tokens (gain / profit / p&l) keep it clear of the sale-amount
-    # and cost columns; exact phrases below outrank a ST/LT *flag* column.
+    # the broker's OWN already-computed per-lot gain, split into the SHORT-term and
+    # LONG-term columns many statements print side by side. Listed BEFORE broker_gain
+    # so a "Short term gain" header resolves to broker_stcg rather than being grabbed
+    # by the generic gain matcher. Validation-only (never used to compute).
+    "broker_stcg": [
+        "short term capital gain", "short term capital gain loss", "short term gain loss",
+        "short term gain", "short term profit", "short term p&l", "short term pnl",
+        "short term realised", "short term realized", "st capital gain", "stcg",
+    ],
+    "broker_ltcg": [
+        "long term capital gain", "long term capital gain loss", "long term gain loss",
+        "long term gain", "long term profit", "long term p&l", "long term pnl",
+        "long term realised", "long term realized", "lt capital gain", "ltcg",
+    ],
+    # the broker's OWN already-computed per-lot gain (single combined column). Optional
+    # (not REQUIRED): never used to compute, only to validate the engine against (see
+    # validate.py). The distinctive tokens (gain / profit / p&l) keep it clear of the
+    # sale-amount and cost columns; exact phrases below outrank a ST/LT *flag* column.
     "broker_gain": [
         "realised gain loss", "realized gain loss", "realised p&l", "realized p&l",
         "realised pnl", "realized pnl", "realised profit", "realized profit",
@@ -286,3 +312,48 @@ def is_repeat_header(row: list[str], header: list[str]) -> bool:
     hn = [_norm(c) for c in header]
     hits = sum(1 for a, b in zip(rn, hn) if a and a == b)
     return hits >= max(3, len([h for h in hn if h]) // 2)
+
+
+# ---- ISIN merged into the security name --------------------------------------
+
+def extract_isin(text) -> str | None:
+    """Pull a valid ISIN out of a free-text cell (the merged "name + ISIN" layout
+    most broker statements use, e.g. "ICICI Bank Ltd - INE090A01021" or
+    "INE090A01021-ICICI Bank"). Returns the ISIN upper-cased, or None."""
+    if not text:
+        return None
+    m = ISIN_RE.search(str(text).upper())
+    return m.group(1) if m else None
+
+
+def strip_isin(name) -> str:
+    """Remove an embedded ISIN from a security name and tidy the leftover
+    separators (dashes, slashes, parentheses, stray whitespace), so the name shown
+    to the preparer and used for the name lookup is clean. ISINs are upper-case by
+    construction, so they are matched directly in the original cell; a name that has
+    no embedded ISIN is returned with only its whitespace normalised."""
+    s = str(name or "")
+    if not ISIN_RE.search(s):
+        return re.sub(r"\s+", " ", s).strip()
+    s = ISIN_RE.sub(" ", s)
+    s = re.sub(r"[\-/|:()\[\]]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip(" -:/|")
+    return s.strip()
+
+
+def name_isin_merge_rate(rows: list[dict], name_col: str, isin_col: str | None) -> float:
+    """Fraction of populated name cells that carry an embedded ISIN. A high rate is
+    the signature of the merged layout and switches on the auto-split suggestion on
+    the map screen. When a real ISIN column is already mapped and populated, the
+    rate is reported as 0 (nothing to rescue)."""
+    if not rows or not name_col:
+        return 0.0
+    if isin_col:
+        isin_filled = sum(1 for r in rows if extract_isin(r.get(isin_col, "")))
+        if isin_filled >= 0.6 * len(rows):
+            return 0.0
+    named = [r for r in rows if str(r.get(name_col, "")).strip()]
+    if not named:
+        return 0.0
+    hit = sum(1 for r in named if extract_isin(r.get(name_col, "")))
+    return hit / len(named)

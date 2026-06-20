@@ -63,11 +63,14 @@ class Tx:
     asset_type: str                      # one of ASSET_TYPES
     quantity: Optional[float] = None
     isin: Optional[str] = None
-    transfer_expenses: float = 0.0
+    transfer_expenses: float = 0.0          # other expenses on SALE (deducted from sale consideration)
+    purchase_expenses: float = 0.0          # other expenses on ACQUISITION (added to cost of acquisition)
     fmv_31jan2018: Optional[float] = None   # per-unit by default (Winman col J convention)
     fmv_basis: str = "per_unit"             # "per_unit" | "total"
-    broker_gain: Optional[float] = None     # broker's OWN per-lot gain; never used to compute,
-                                            # only to validate the engine against (validate.py)
+    broker_gain: Optional[float] = None     # broker's OWN per-lot gain (single column); never used to
+                                            # compute, only to validate the engine against (validate.py)
+    broker_stcg: Optional[float] = None     # broker's OWN SHORT-term gain column (validation only)
+    broker_ltcg: Optional[float] = None     # broker's OWN LONG-term gain column (validation only)
     stt_paid: bool = True
     is_50aa: bool = False
     cost_basis_meaning: str = "raw"         # "raw" | "grandfathered"
@@ -104,6 +107,22 @@ class Result:
     gain: float = 0.0
     flags: list = field(default_factory=list)
 
+    def broker_gain_used(self) -> Optional[float]:
+        """The broker's own stated gain for THIS lot, picking the right column when
+        the statement carries separate short-term and long-term gain columns:
+        long column for a long-term lot, short column for a short-term lot, falling
+        back to the single combined `broker_gain` (or whichever split column is
+        populated). Returns None when the statement carried no gain figure."""
+        t = self.tx
+        if self.is_ltcg and t.broker_ltcg is not None:
+            return t.broker_ltcg
+        if (not self.is_ltcg) and t.broker_stcg is not None:
+            return t.broker_stcg
+        if t.broker_gain is not None:
+            return t.broker_gain
+        present = [v for v in (t.broker_stcg, t.broker_ltcg) if v is not None]
+        return sum(present) if present else None
+
     def trace(self) -> dict:
         """The audit snapshot that rides into Output A, one row."""
         return {
@@ -125,8 +144,7 @@ class Result:
             "net_sale_consideration": round(self.net_sale_consideration, 2),
             "cost_used": round(self.cost_used, 2),
             "gain": round(self.gain, 2),
-            "broker_gain": (round(self.tx.broker_gain, 2)
-                            if self.tx.broker_gain is not None else None),
+            "broker_gain": (round(bg, 2) if (bg := self.broker_gain_used()) is not None else None),
             "flags": "; ".join(self.flags),
         }
 
@@ -171,19 +189,28 @@ def _fmv_total(tx: Tx) -> Optional[float]:
     return tx.fmv_31jan2018 * tx.quantity
 
 
+def _actual_cost(tx: Tx) -> float:
+    """Cost of acquisition = the stated purchase cost PLUS any mapped other expenses
+    on acquisition (brokerage / charges incurred on the buy). The preparer opts in by
+    mapping the column; when unmapped it is 0.0 and the cost is unchanged."""
+    return tx.purchase_cost + (tx.purchase_expenses or 0.0)
+
+
 def _apply_grandfathering(tx: Tx, net_sale: float, res: Result) -> float:
     """
     Returns the cost to use. Substitution per Sec 55(2)(ac):
         cost = max(actual_cost, min(FMV_31Jan2018_total, net_sale_consideration))
+    where actual_cost includes mapped acquisition expenses (see _actual_cost).
     Applied ONLY when: asset is equity/EOF, acquired before 01-Feb-2018, AND the
     source cost is RAW. If the source already grandfathered, FMV is suppressed.
     """
+    actual = _actual_cost(tx)
     eligible = (
         tx.asset_type in ("equity", "eof")
         and tx.acquisition_date < GF_CUTOFF
     )
     if not eligible:
-        return tx.purchase_cost
+        return actual
 
     if tx.cost_basis_meaning == "grandfathered":
         res.grandfathering_detail = (
@@ -192,22 +219,22 @@ def _apply_grandfathering(tx: Tx, net_sale: float, res: Result) -> float:
         )
         if tx.fmv_31jan2018 is not None:
             res.flags.append("FMV present but ignored (cost already grandfathered)")
-        return tx.purchase_cost
+        return actual
 
     # cost is raw -> engine substitutes
     fmv_t = _fmv_total(tx)
     if fmv_t is None:
         res.flags.append("pre-2018 lot, raw cost, FMV missing -> grandfathering NOT applied; key-in FMV")
         res.grandfathering_detail = "pre-2018 raw lot with no FMV — actual cost retained, confirm FMV"
-        return tx.purchase_cost
+        return actual
 
     lower = min(fmv_t, net_sale)
-    cost = max(tx.purchase_cost, lower)
+    cost = max(actual, lower)
     res.grandfathering_applied = True
-    won = "FMV" if cost == lower and lower >= tx.purchase_cost and lower == fmv_t else (
+    won = "FMV" if cost == lower and lower >= actual and lower == fmv_t else (
         "net-sale-cap" if cost == lower else "actual cost")
     res.grandfathering_detail = (
-        f"max(actual {tx.purchase_cost:,.0f}, "
+        f"max(actual {actual:,.0f}, "
         f"min(FMV {fmv_t:,.0f}, net sale {net_sale:,.0f})) "
         f"= {cost:,.0f} [{won} retained]"
     )

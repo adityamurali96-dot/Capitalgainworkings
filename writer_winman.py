@@ -40,6 +40,7 @@ SHEET1 = [
     ("SELLING", "Selling Expenses", "transfer_expenses"),
     ("NETSALE", "Net Sale consideration", None),          # grey
     ("ACTUALCOST", "Actual cost of Acquisition", "_actualcost"),
+    ("ACQEXPENSES", "Other acq. expenses (incl. in cost)", "purchase_expenses"),
     ("FMV", "FMV u/s 55(2)(ac) per share/unit", "fmv_31jan2018"),
     ("COSTOFACQUISITION", "Cost of Acquisition deductible", None),  # grey
     ("SHORTTERM", "Short term gain u/s 111A", None),      # grey
@@ -57,6 +58,7 @@ SHEET3 = [
     ("SELLING", "Selling Expenses", "transfer_expenses"),
     ("NETSALE", "Net Sale consideration", None),
     ("ACTUALCOST", "Actual cost of Acquisition", "_actualcost"),
+    ("ACQEXPENSES", "Other acq. expenses (incl. in cost)", "purchase_expenses"),
     ("INDEXED", "Indexed cost (if applicable)", None),
     ("SHORTTERM", "Short term gain", None),
     ("LTCG", "LTCG", None),
@@ -69,6 +71,7 @@ SHEET5 = [
     ("TRANSFERDATE", "Date of Transfer", "transfer_date"),
     ("SALE", "Sale consideration", "sale_consideration"),
     ("ACTUALCOST", "Cost of Acquisition", "_actualcost"),
+    ("ACQEXPENSES", "Other acq. expenses (incl. in cost)", "purchase_expenses"),
     ("INCOME", "Income u/s 115BBH", None),
     ("ISIN", "ISIN / token", "isin"),
 ]
@@ -87,10 +90,11 @@ def _val(r, field):
     if field == "_is_ltcg":
         return "Yes" if r.is_ltcg else "No"
     if field == "_actualcost":
-        # Winman wants RAW actual cost (it does the grandfathering substitution).
-        # If the source already grandfathered, that pre-substituted figure is what we hold;
-        # flag it so the preparer knows Winman should not re-apply FMV.
-        return round(t.purchase_cost, 2)
+        # Actual cost of acquisition = stated purchase cost PLUS any mapped other
+        # expenses on acquisition (deductible — the preparer opted in by mapping the
+        # column). Winman does the grandfathering substitution from this figure; the
+        # raw expense portion is also shown separately in the ACQEXPENSES column.
+        return round(t.purchase_cost + (t.purchase_expenses or 0.0), 2)
     if field == "_mf_type":
         return "50AA - Debt oriented" if t.is_50aa else "Listed - others"
     if field is None:
@@ -139,7 +143,8 @@ def _write_sheet(ws, schema, rows):
             c.font = Font(name=ARIAL, size=SZ)
             if src in ("acquisition_date", "transfer_date"):
                 c.number_format = DATEFMT
-            elif src in ("sale_consideration", "transfer_expenses", "_actualcost", "fmv_31jan2018"):
+            elif src in ("sale_consideration", "transfer_expenses", "purchase_expenses",
+                         "_actualcost", "fmv_31jan2018"):
                 c.number_format = ACCT
             if src is None:
                 c.fill = GREY

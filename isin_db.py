@@ -16,7 +16,7 @@ Point DB_PATH at your real isin_master.db (the 26,802-ISIN NSE/AMFI build). The
 reader introspects the schema, so it tolerates differing column names.
 """
 from __future__ import annotations
-import os, re, sqlite3
+import os, re, sqlite3, difflib
 from typing import Optional
 
 DB_PATH = os.environ.get("ISIN_DB_PATH",
@@ -84,6 +84,70 @@ def _norm_type(raw: Optional[str]) -> Optional[str]:
     return _CATEGORY_MAP.get(str(raw).strip().lower())
 
 
+# words that carry no identity signal in a security/scheme name — dropped before the
+# fuzzy compare so "Reliance Industries Ltd" and "RELIANCE INDUSTRIES" score as equal.
+_NAME_NOISE = re.compile(
+    r"\b(ltd|limited|pvt|private|the|co|company|corp|corporation|inc|plc|"
+    r"fund|scheme|growth|regular|direct|plan|option|dividend|reinvestment|"
+    r"idcw|payout|equity|series|nse|bse|mutual|amc)\b", re.I)
+
+# floor below which a name match is too weak to even propose -> falls to manual.
+_NAME_FLOOR = 0.45
+# at/above this the proposal is treated as confident; below it is flagged low-confidence.
+_NAME_CONFIDENT = 0.80
+
+
+def _norm_name(s) -> str:
+    s = str(s or "").upper()
+    s = re.sub(r"[^A-Z0-9 ]", " ", s)
+    s = _NAME_NOISE.sub(" ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _ratio(a: str, b: str) -> float:
+    """Blend of character-sequence similarity and token (word-set) overlap, so the
+    score is robust to word reordering and trailing scheme/series cruft."""
+    if not a or not b:
+        return 0.0
+    seq = difflib.SequenceMatcher(None, a, b).ratio()
+    ta, tb = set(a.split()), set(b.split())
+    tok = len(ta & tb) / len(ta | tb) if (ta or tb) else 0.0
+    return max(seq, tok)
+
+
+def _best_name_match(cur, table, c_name, c_type, name):
+    """Pull plausible candidates by a token LIKE, fuzzy-rank them, and return
+    (asset_type, matched_name, ratio) for the best routable hit, or None. Only the
+    routable rows (a category we can map) are considered, so the proposal always
+    carries an asset_type."""
+    qn = _norm_name(name)
+    if not qn:
+        return None
+    tokens = [t for t in qn.split() if len(t) >= 3] or [qn[:4]]
+    seen: set[str] = set()
+    cands = []
+    for tok in tokens[:2]:
+        for row in cur.execute(
+                f"SELECT * FROM '{table}' WHERE UPPER({c_name}) LIKE ? LIMIT 400",
+                (f"%{tok}%",)).fetchall():
+            nm = str(row[c_name] or "")
+            if nm in seen:
+                continue
+            seen.add(nm)
+            cands.append(row)
+        if len(cands) >= 400:
+            break
+    best = None
+    for row in cands:
+        at = _norm_type(row[c_type]) if c_type else None
+        if not at:
+            continue
+        r = _ratio(qn, _norm_name(row[c_name]))
+        if best is None or r > best[2]:
+            best = (at, str(row[c_name]), r)
+    return best if (best and best[2] >= _NAME_FLOOR) else None
+
+
 def lookup(isin: Optional[str], name: Optional[str]) -> dict:
     """
     -> {asset_type, basis, confidence, matched, reason}
@@ -121,18 +185,23 @@ def lookup(isin: Optional[str], name: Optional[str]) -> dict:
                                  "index / FoF) — confirm orientation", matched=isin)
                 return _miss(f"ISIN found but class {raw!r} not mapped — set manually", matched=isin)
 
-        # 2) name match -> proposed (heuristic, never trusted)
+        # 2) name match -> proposed (heuristic, never trusted). Fuzzy-ranked so a
+        #    near-miss still yields a PROPOSED asset class rather than dumping the
+        #    preparer into manual; below 80% it is flagged low-confidence, below the
+        #    floor it falls through to manual.
         if name and c_name:
-            key = name.strip().upper()[:18]
-            row = cur.execute(
-                f"SELECT * FROM '{table}' WHERE UPPER({c_name}) LIKE ? LIMIT 1",
-                (key + "%",)).fetchone()
-            if row:
-                at = _norm_type(row[c_type]) if c_type else None
-                if at:
-                    return {"asset_type": at, "basis": f"name prefix match ({row[c_name]})",
-                            "confidence": "proposed", "matched": row[c_name],
-                            "reason": "name-only match — confirm orientation"}
+            best = _best_name_match(cur, table, c_name, c_type, name)
+            if best:
+                at, matched_name, ratio = best
+                pct = round(ratio * 100)
+                if ratio >= _NAME_CONFIDENT:
+                    reason = f"name match {pct}% ({matched_name}) — confirm orientation"
+                else:
+                    reason = (f"low-confidence name match {pct}% ({matched_name}) — "
+                              f"proposed asset class only, verify before filing")
+                return {"asset_type": at, "basis": f"name match {pct}%",
+                        "confidence": "proposed", "matched": matched_name,
+                        "reason": reason, "score": round(ratio, 3)}
 
         return _miss("no ISIN/name match — set asset type manually")
     finally:

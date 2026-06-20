@@ -154,6 +154,45 @@ def test_transfer_before_acquisition_rejected():
     raise AssertionError("expected ValueError for transfer before acquisition")
 
 
+def test_purchase_expenses_added_to_cost_of_acquisition():
+    # mapped acquisition expenses are folded into the cost (deductible) -> lower gain
+    base = compute_row(_tx(purchase_cost=100.0, sale_consideration=1000.0))
+    withx = compute_row(_tx(purchase_cost=100.0, sale_consideration=1000.0,
+                            purchase_expenses=30.0))
+    assert base.cost_used == 100.0 and base.gain == 900.0
+    assert withx.cost_used == 130.0 and withx.gain == 870.0
+
+
+def test_purchase_expenses_inside_grandfathering_actual_cost():
+    # pre-2018 raw lot: actual cost (incl. acq expenses) competes with the FMV cap.
+    # cost=100, acq exp=50 -> actual 150; fmv 50*qty10=500; net sale 1000 -> 500 wins
+    r = compute_row(_tx(acquisition_date=date(2015, 1, 1), purchase_cost=100.0,
+                        purchase_expenses=50.0, sale_consideration=1000.0, quantity=10,
+                        fmv_31jan2018=50.0, fmv_basis="per_unit", cost_basis_meaning="raw"))
+    assert r.grandfathering_applied is True and r.cost_used == 500.0
+    # but when acq expenses push actual above the FMV cap, actual cost is retained
+    r2 = compute_row(_tx(acquisition_date=date(2015, 1, 1), purchase_cost=100.0,
+                         purchase_expenses=600.0, sale_consideration=1000.0, quantity=10,
+                         fmv_31jan2018=50.0, fmv_basis="per_unit", cost_basis_meaning="raw"))
+    assert r2.cost_used == 700.0   # max(actual 700, min(fmv 500, net 1000))
+
+
+def test_broker_gain_used_picks_short_or_long_column():
+    # long-term lot -> the long column is the comparison figure; short column ignored
+    lt = compute_row(_tx(acquisition_date=date(2020, 1, 1), transfer_date=date(2024, 8, 1),
+                         broker_stcg=111.0, broker_ltcg=900.0))
+    assert lt.is_ltcg is True and lt.broker_gain_used() == 900.0
+    # short-term lot -> the short column is used
+    st = compute_row(_tx(acquisition_date=date(2024, 1, 1), transfer_date=date(2024, 8, 1),
+                         broker_stcg=900.0, broker_ltcg=0.0))
+    assert st.is_ltcg is False and st.broker_gain_used() == 900.0
+    # neither split column populated for this lot's side, but a single column exists
+    only_single = compute_row(_tx(broker_gain=900.0))
+    assert only_single.broker_gain_used() == 900.0
+    # no broker figure at all
+    assert compute_row(_tx()).broker_gain_used() is None
+
+
 def test_compute_all_preserves_order_and_count():
     txns = [_tx(security_name="A"), _tx(security_name="B", asset_type="vda")]
     out = compute_all(txns)
