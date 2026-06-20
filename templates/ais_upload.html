@@ -2,8 +2,10 @@
 {% block body %}
 <p class="note"><a href="{{url_for('home')}}">← main menu</a></p>
 <h2>AIS Reconciliation</h2>
-<p class="sub">Upload both files. Columns are auto-detected — no mapping step.
-Sale values are totalled per security and matched (ISIN first, then name).</p>
+<p class="sub">Upload both files. Columns are auto-detected; you then get a quick
+screen to <b>confirm the AIS file's columns</b> (the broker/CG file is read
+automatically). Sale values are totalled per security and matched (ISIN first,
+then name).</p>
 
 <div class="card">
   <form action="{{url_for('ais')}}" method="post" enctype="multipart/form-data">

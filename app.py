@@ -115,7 +115,10 @@ def _extract_records(file_storage):
     """Read a file for reconciliation: auto-pick the data sheet + header row,
     auto-map columns, and return (clean dict rows, automap, info). Reuses the
     same detection + blank/divider handling as the CG flow, plus a forward-fill
-    for grouped layouts. No mapping UI — reconciliation is a fast, automatic pass."""
+    for grouped layouts. The auto-map is a starting point — the AIS file's
+    columns are shown for confirmation/override on the /ais/map screen; the
+    broker/CG file is consumed automatically. `info["headers"]` carries the
+    detected header names so the confirm screen can render a column preview."""
     sheets = _read_any(file_storage, header_row=None)
     cleaned = {}
     for k, v in sheets.items():
@@ -124,7 +127,7 @@ def _extract_records(file_storage):
         cleaned[k] = rows
     ranked = detect.rank_sheets(cleaned)
     top = ranked[0] if ranked else None
-    info = {"sheet": None, "header_row": None, "n": 0}
+    info = {"sheet": None, "header_row": None, "n": 0, "headers": []}
     if not top or top["header_row"] is None:
         return [], {}, info
     sheet, hr = top["name"], top["header_row"]
@@ -147,8 +150,13 @@ def _extract_records(file_storage):
         if name_c and detect.is_junk_label(r.get(name_c, "")):
             continue
         out.append(r)
-    info = {"sheet": sheet, "header_row": hr, "n": len(out), "automap": automap}
+    info = {"sheet": sheet, "header_row": hr, "n": len(out),
+            "automap": automap, "headers": clean}
     return out, automap, info
+
+
+# the four fields the reconciliation needs from each side
+RECO_FIELDS = ["security_name", "isin", "sale_consideration", "quantity"]
 
 
 def _reco_cols(automap):
@@ -421,33 +429,100 @@ def ais():
     except Exception as e:
         flash(f"Could not read a file: {e}"); return redirect(url_for("ais"))
 
-    # both sides must yield a sale-value column and at least one key (ISIN/name)
+    # the broker/CG file is consumed automatically — it must yield a sale-value
+    # column and at least one key (ISIN/name) on its own.
     problems = []
-    for tag, mp in (("capital-gains/broker", cg_map), ("AIS", ais_map)):
-        if "sale_consideration" not in mp:
-            problems.append(f"no sale-value column found in the {tag} file")
-        if "isin" not in mp and "security_name" not in mp:
-            problems.append(f"no ISIN or security-name column found in the {tag} file")
+    if "sale_consideration" not in cg_map:
+        problems.append("no sale-value column found in the capital-gains/broker file")
+    if "isin" not in cg_map and "security_name" not in cg_map:
+        problems.append("no ISIN or security-name column found in the capital-gains/broker file")
+    if not ais_info.get("headers"):
+        problems.append("could not locate the AIS data header automatically — check the file")
     if problems:
         for p in problems:
             flash(p)
         return redirect(url_for("ais"))
 
+    # aggregate the CG side now; the AIS side waits for the confirm screen so the
+    # preparer can see and override its column wiring before the match.
     cg_agg = reco.aggregate(cg_rows, *_reco_cols(cg_map))
-    ais_agg = reco.aggregate(ais_rows, *_reco_cols(ais_map))
-    result = reco.reconcile(cg_agg, ais_agg)
+    j["reco"] = {
+        "cg_agg": cg_agg,
+        "cg_label": os.path.splitext(cg_f.filename)[0][:24],
+        "ais_label": os.path.splitext(ais_f.filename)[0][:24],
+        "cg_info": cg_info,
+        "ais_rows": ais_rows,
+        "ais_headers": ais_info.get("headers", []),
+        "ais_info": ais_info,
+        "ais_automap": ais_map,
+    }
+    return redirect(url_for("ais_map"))
 
-    cg_label = os.path.splitext(cg_f.filename)[0][:24]
-    ais_label = os.path.splitext(ais_f.filename)[0][:24]
-    base = "".join(c for c in cg_label if c.isalnum() or c in " _-").strip() or "reco"
-    rfile = os.path.join(OUT_DIR, f"{base}_AIS_Reco.xlsx")
-    write_reco(result, rfile, cg_label=cg_label, ais_label=ais_label)
-    j["reco_file"] = os.path.basename(rfile)
-    return render_template("ais_result.html", result=result,
-                           counts=result.counts(), totals=result.totals(),
-                           cg_info=cg_info, ais_info=ais_info,
-                           cg_label=cg_label, ais_label=ais_label,
-                           reco_file=os.path.basename(rfile), out_dir=OUT_DIR)
+
+def _render_ais_map(r, col_field):
+    """Render the AIS column-confirm screen: a selector sits on top of each
+    column, with the real data shown beneath so the picked column is visible."""
+    headers = r["ais_headers"]
+    rows = r["ais_rows"]
+    preview = [[str(row.get(h, "")) for h in headers] for row in rows[:12]]
+    return render_template("ais_map.html", headers=headers, fields=RECO_FIELDS,
+                           col_field=col_field, preview=preview,
+                           ais_label=r["ais_label"], cg_label=r["cg_label"],
+                           n=r["ais_info"].get("n", len(rows)),
+                           sheet=r["ais_info"].get("sheet"))
+
+
+@app.route("/ais/map", methods=["GET", "POST"])
+def ais_map():
+    j = job()
+    r = j.get("reco")
+    if not r:
+        return redirect(url_for("ais"))
+    headers = r["ais_headers"]
+
+    if request.method == "POST":
+        # column-first wiring: each column picks one canonical field (or none).
+        # First column to claim a field wins (the screen enforces uniqueness).
+        m, col_field = {}, {}
+        for ci, h in enumerate(headers):
+            f = request.form.get(f"col_{ci}") or ""
+            if f in RECO_FIELDS:
+                col_field[ci] = f
+                if f not in m:
+                    m[f] = h
+        problems = []
+        if "sale_consideration" not in m:
+            problems.append("Pick the sale-value column in the AIS file.")
+        if "isin" not in m and "security_name" not in m:
+            problems.append("Pick an ISIN or a security-name column in the AIS file.")
+        if problems:
+            for p in problems:
+                flash(p)
+            return _render_ais_map(r, col_field)
+
+        ais_agg = reco.aggregate(r["ais_rows"], m.get("security_name"),
+                                 m.get("isin"), m.get("sale_consideration"),
+                                 m.get("quantity"))
+        result = reco.reconcile(r["cg_agg"], ais_agg)
+        cg_label, ais_label = r["cg_label"], r["ais_label"]
+        base = "".join(c for c in cg_label if c.isalnum() or c in " _-").strip() or "reco"
+        rfile = os.path.join(OUT_DIR, f"{base}_AIS_Reco.xlsx")
+        write_reco(result, rfile, cg_label=cg_label, ais_label=ais_label)
+        j["reco_file"] = os.path.basename(rfile)
+        return render_template("ais_result.html", result=result,
+                               counts=result.counts(), totals=result.totals(),
+                               cg_info=r["cg_info"], ais_info=r["ais_info"],
+                               cg_label=cg_label, ais_label=ais_label,
+                               reco_file=os.path.basename(rfile), out_dir=OUT_DIR)
+
+    # GET: pre-select each column from the auto-map (col index -> canonical field)
+    col_field = {}
+    for f, info in r["ais_automap"].items():
+        if f in RECO_FIELDS:
+            ci = info.get("col")
+            if ci is not None and 0 <= ci < len(headers):
+                col_field[ci] = f
+    return _render_ais_map(r, col_field)
 
 
 @app.route("/ais/download")
