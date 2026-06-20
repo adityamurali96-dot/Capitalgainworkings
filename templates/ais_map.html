@@ -1,0 +1,75 @@
+{% extends "base.html" %}{% block step %}AIS reco · confirm columns{% endblock %}
+{% block body %}
+<style>
+table.mapgrid{font-size:13px}
+table.mapgrid th,table.mapgrid td{white-space:nowrap;position:static}
+table.mapgrid th.orig{color:var(--mut);font-weight:600;background:#fafafa;font-size:12px}
+table.mapgrid td{color:#333}
+table.mapgrid select{min-width:140px}
+table.mapgrid .selrow th{background:#fff;padding:5px 6px}
+.mapped{background:#e6f0fb !important}
+.fieldkey{font-size:12px;color:var(--mut);margin:0 0 12px}
+.fieldkey b{color:var(--ink)}
+</style>
+
+<p class="note"><a href="{{url_for('ais')}}">← upload</a></p>
+<h2>Confirm the AIS columns</h2>
+<p class="sub">Auto-detected from sheet <span class="mono">{{sheet}}</span> ({{n}} rows).
+Use the dropdown <b>on top of each column</b> to say what it is — the data below
+shows you exactly which column you're picking. The auto-detected wiring is
+pre-selected; override anything that's wrong, then reconcile against
+<b>{{cg_label}}</b>.</p>
+
+<p class="fieldkey">Fields the match needs: <b>sale value</b> (required) and an
+<b>ISIN</b> or <b>security name</b> (at least one). <b>Quantity</b> is optional.
+Each field can sit on a single column.</p>
+
+<form action="{{url_for('ais_map')}}" method="post">
+<div class="card">
+  <div class="scroll"><table class="mapgrid">
+    <tr class="selrow">
+      {% for h in headers %}{% set ci = loop.index0 %}
+      <th data-col="{{ci}}">
+        <select name="col_{{ci}}" data-col="{{ci}}" onchange="hl(this)">
+          <option value="">— ignore —</option>
+          {% for f in fields %}<option value="{{f}}" {% if col_field.get(ci)==f %}selected{% endif %}>{{f}}</option>{% endfor %}
+        </select>
+      </th>
+      {% endfor %}
+    </tr>
+    <tr>
+      {% for h in headers %}<th class="orig" data-col="{{loop.index0}}">{{h[:28]}}</th>{% endfor %}
+    </tr>
+    {% for row in preview %}
+    <tr>
+      {% for c in row %}<td data-col="{{loop.index0}}">{{c[:28]}}</td>{% endfor %}
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% if not preview %}<p class="note">No data rows to preview — pick by the column header names above.</p>{% endif %}
+</div>
+<button class="btn" type="submit">Reconcile →</button>
+<a class="btn alt" href="{{url_for('ais')}}">Start over</a>
+</form>
+
+<script>
+function paint(col, on){
+  document.querySelectorAll('[data-col="'+col+'"]').forEach(function(el){
+    el.classList.toggle('mapped', on);
+  });
+}
+function hl(sel){
+  var v = sel.value, mine = sel.getAttribute('data-col');
+  if(v){  // a field lives on one column only: clear any other column holding it
+    document.querySelectorAll('select[name^="col_"]').forEach(function(s){
+      if(s !== sel && s.value === v){ s.value = ""; paint(s.getAttribute('data-col'), false); }
+    });
+  }
+  paint(mine, !!v);
+}
+// initial highlight from the pre-selected (auto-detected) wiring
+document.querySelectorAll('select[name^="col_"]').forEach(function(s){
+  if(s.value) paint(s.getAttribute('data-col'), true);
+});
+</script>
+{% endblock %}

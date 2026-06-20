@@ -125,8 +125,13 @@ The Flask templates live in `templates/`; the ISIN classification DB
 ## AIS Reconciliation (the second menu path)
 
 Upload two files — the capital-gains/broker file and the AIS statement. Both are
-auto-detected with the same `detect.py` engine (sheet, header row, columns), then
-reduced to **sale value per security** and matched:
+auto-detected with the same `detect.py` engine (sheet, header row, columns). The
+broker/CG file is then consumed automatically; for the **AIS file** you get a
+quick **confirm-columns** screen — a selector sits on top of each column with the
+real data shown beneath, so you can see and override which column is the sale
+value / ISIN / security name / quantity before matching (the auto-detected wiring
+is pre-selected). Both sides are then reduced to **sale value per security** and
+matched:
 
 - **key**: valid ISIN first; a name-only side is rescued by normalised name.
 - **tolerance**: matched if values agree within ₹1 or 1% (absorbs AIS rounding).
