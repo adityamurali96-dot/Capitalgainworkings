@@ -8,14 +8,32 @@ FMV presence + basis). This module only normalises and assembles — no tax logi
 from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
+import detect
 from compute import Tx
 
 CANONICAL_FIELDS = [
-    "security_name", "acquisition_date", "purchase_cost", "transfer_date",
-    "sale_consideration", "quantity", "isin", "transfer_expenses", "fmv_31jan2018",
-    "broker_gain",
+    "security_name", "acquisition_date", "purchase_cost", "purchase_expenses",
+    "transfer_date", "sale_consideration", "quantity", "isin", "transfer_expenses",
+    "fmv_31jan2018", "broker_stcg", "broker_ltcg", "broker_gain",
 ]
 REQUIRED = ["security_name", "acquisition_date", "purchase_cost", "transfer_date", "sale_consideration"]
+
+# Friendly labels for the map screen (the raw field keys are terse on purpose).
+FIELD_LABELS = {
+    "security_name": "Security / scrip name",
+    "acquisition_date": "Acquisition (purchase) date",
+    "purchase_cost": "Purchase cost (actual cost of acquisition)",
+    "purchase_expenses": "Other expenses on acquisition (added to cost)",
+    "transfer_date": "Sale (transfer) date",
+    "sale_consideration": "Sale consideration (gross)",
+    "quantity": "Quantity",
+    "isin": "ISIN",
+    "transfer_expenses": "Other expenses on sale (deducted from sale)",
+    "fmv_31jan2018": "FMV on 31-Jan-2018 (grandfathering)",
+    "broker_stcg": "Broker's stated SHORT-term gain (validation)",
+    "broker_ltcg": "Broker's stated LONG-term gain (validation)",
+    "broker_gain": "Broker's stated gain — single column (validation)",
+}
 
 _EXCEL_EPOCH = date(1899, 12, 30)  # Excel serial origin (accounts for 1900 leap bug)
 
@@ -62,6 +80,27 @@ def parse_date(v):
     return None
 
 
+def split_name_isin(raw_name, raw_isin):
+    """Resolve the (clean security name, ISIN) pair, handling the common broker
+    layout where the ISIN is merged INTO the security cell (e.g. "ICICI Bank Ltd
+    - INE090A01021" or "INE090A01021 ICICI Bank"). Order of resolution:
+      1. a usable ISIN in its own mapped cell wins;
+      2. else an ISIN embedded in the mapped ISIN cell is extracted;
+      3. else an ISIN embedded in the name is extracted.
+    The ISIN is always stripped back out of the returned name so the name shown to
+    the preparer (and used for the name-based lookup) is clean. Returns
+    (name_or_None, isin_or_None)."""
+    name = str(raw_name).strip() if raw_name is not None else ""
+    isin = str(raw_isin).strip().upper() if raw_isin else ""
+    if isin and not re.fullmatch(r"[A-Z0-9]{12}", isin):
+        isin = detect.extract_isin(isin) or (isin if len(isin) == 12 else "")
+    if not isin and name:
+        isin = detect.extract_isin(name) or ""
+    if name:
+        name = detect.strip_isin(name)
+    return (name or None), (isin or None)
+
+
 def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None = None):
     """
     row: one source record (header->value)
@@ -78,15 +117,17 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
             return None
         return row.get(col)
 
-    name = g("security_name")
-    name = str(name).strip() if name is not None else None
+    # name + ISIN, with the merged-ISIN-in-name case auto-split (see split_name_isin)
+    name, isin = split_name_isin(g("security_name"), g("isin"))
     acq = parse_date(g("acquisition_date"))
     xfer = parse_date(g("transfer_date"))
     cost = parse_amount(g("purchase_cost"))
     sale = parse_amount(g("sale_consideration"))
     qty = parse_amount(g("quantity"))
     fmv = parse_amount(g("fmv_31jan2018"))
-    broker_gain = parse_amount(g("broker_gain"))   # broker's own figure; validation only
+    broker_gain = parse_amount(g("broker_gain"))    # broker's own single gain column; validation only
+    broker_stcg = parse_amount(g("broker_stcg"))    # broker's own short-term gain column; validation only
+    broker_ltcg = parse_amount(g("broker_ltcg"))    # broker's own long-term gain column; validation only
 
     # Grandfathering basis. Under "fmv" the acquisition date may be absent (many
     # broker statements drop it for grandfathered pre-2018 holdings and give only
@@ -103,17 +144,8 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
             acq = xfer                       # zero holding -> short term
             acq_inferred = True
             acq_note = "acq date and 31-Jan-2018 FMV both absent -> treated as SHORT TERM (holding period unknown)"
-    isin = g("isin")
-    isin = str(isin).strip().upper() if isin else None
-    if isin and not re.fullmatch(r"[A-Z0-9]{12}", isin):
-        # ISIN sometimes embedded in name e.g. "ICICI Bank Ltd-INE090A01021"
-        m = re.search(r"([A-Z]{2}[A-Z0-9]{9}\d)", isin)
-        isin = m.group(1) if m else (isin if len(isin) == 12 else None)
-    if not isin and name:
-        m = re.search(r"([A-Z]{2}[A-Z0-9]{9}\d)", name.upper())
-        if m:
-            isin = m.group(1)
     exp = parse_amount(g("transfer_expenses")) or 0.0
+    acq_exp = parse_amount(g("purchase_expenses")) or 0.0
 
     cls = classification or {}
     asset_type = cls.get("asset_type") or decl.get("default_asset_type")
@@ -134,9 +166,9 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
         tx = Tx(
             security_name=name, acquisition_date=acq, transfer_date=xfer,
             purchase_cost=cost, sale_consideration=sale, asset_type=asset_type,
-            quantity=qty, isin=isin, transfer_expenses=exp,
+            quantity=qty, isin=isin, transfer_expenses=exp, purchase_expenses=acq_exp,
             fmv_31jan2018=fmv, fmv_basis=decl.get("fmv_basis", "per_unit"),
-            broker_gain=broker_gain,
+            broker_gain=broker_gain, broker_stcg=broker_stcg, broker_ltcg=broker_ltcg,
             stt_paid=bool(stt), is_50aa=bool(is_50aa),
             cost_basis_meaning=decl.get("cost_basis_meaning", "raw"),
             source_label=decl.get("source_label", ""),

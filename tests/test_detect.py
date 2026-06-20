@@ -103,6 +103,54 @@ def test_junk_label_and_repeat_header():
     assert not detect.is_repeat_header(["INFY", "INE009A01021", "32"], hdr)
 
 
+def test_split_short_long_broker_gain_columns():
+    # a statement printing separate short- and long-term gain columns maps both,
+    # and the generic gain matcher does not steal either.
+    mp = detect.auto_map(["Security", "ISIN", "Sale Date", "Purchase Date",
+                          "Sale Value", "Purchase Value",
+                          "Short Term Gain", "Long Term Gain"])
+    assert mp["broker_stcg"]["header"] == "Short Term Gain"
+    assert mp["broker_ltcg"]["header"] == "Long Term Gain"
+
+
+def test_single_broker_gain_still_maps():
+    mp = detect.auto_map(["Security", "Sale Date", "Purchase Date",
+                          "Sale Value", "Purchase Value", "Realised P&L"])
+    assert mp["broker_gain"]["header"] == "Realised P&L"
+
+
+def test_purchase_and_sale_expense_columns_map_separately():
+    mp = detect.auto_map(["Security", "Sale Date", "Purchase Date", "Sale Value",
+                          "Purchase Value", "Purchase Charges", "Selling Expenses"])
+    assert mp["purchase_expenses"]["header"] == "Purchase Charges"
+    assert mp["transfer_expenses"]["header"] == "Selling Expenses"
+
+
+def test_extract_isin_from_merged_name():
+    assert detect.extract_isin("ICICI Bank Ltd - INE090A01021") == "INE090A01021"
+    assert detect.extract_isin("INE002A01018 Reliance") == "INE002A01018"
+    assert detect.extract_isin("Reliance Industries Ltd") is None
+
+
+def test_strip_isin_cleans_name_only_when_present():
+    assert detect.strip_isin("ICICI Bank Ltd - INE090A01021") == "ICICI Bank Ltd"
+    assert detect.strip_isin("INE009A01021 Infosys Ltd") == "Infosys Ltd"
+    # no embedded ISIN -> separators in a legitimate name are left intact
+    assert detect.strip_isin("HDFC Ltd / Bonus") == "HDFC Ltd / Bonus"
+
+
+def test_name_isin_merge_rate_flags_merged_layout():
+    merged = [{"name": "INFY INE009A01021"}, {"name": "TCS INE467B01029"},
+              {"name": "WIPRO INE075A01022"}]
+    assert detect.name_isin_merge_rate(merged, "name", None) == 1.0
+    plain = [{"name": "INFY"}, {"name": "TCS"}]
+    assert detect.name_isin_merge_rate(plain, "name", None) == 0.0
+    # a populated separate ISIN column means there is nothing to rescue
+    sep = [{"name": "INFY INE009A01021", "isin": "INE009A01021"},
+           {"name": "TCS INE467B01029", "isin": "INE467B01029"}]
+    assert detect.name_isin_merge_rate(sep, "name", "isin") == 0.0
+
+
 def test_detect_header_row_skips_preamble():
     rows = [
         ["Client ID", "YQL053", ""],

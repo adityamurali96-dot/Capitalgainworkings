@@ -93,6 +93,21 @@ def test_counts_summarise_statuses():
     assert c == {"lots": 3, "with_broker": 2, "match": 1, "mismatch": 1, "no_broker": 1}
 
 
+def test_split_broker_columns_feed_validation_per_lot():
+    # a long-term lot validated against the broker's LONG column (short column ignored)
+    lt = compute_row(_tx(acquisition_date=date(2020, 1, 1), transfer_date=date(2024, 8, 1),
+                         broker_stcg=0.0, broker_ltcg=900.0))
+    # a short-term lot validated against the broker's SHORT column
+    st = compute_row(_tx(acquisition_date=date(2024, 1, 1), transfer_date=date(2024, 8, 1),
+                         sale_consideration=500.0, broker_stcg=400.0, broker_ltcg=0.0))
+    v = validate.build_validation([lt, st])
+    assert v.lots[0].broker_gain == 900.0 and v.lots[0].status == "match"
+    assert v.lots[1].broker_gain == 400.0 and v.lots[1].status == "match"
+    assert v.rollup["long"]["broker"] == 900.0
+    assert v.rollup["short"]["broker"] == 400.0
+    assert v.coverage == {"n": 2, "n_broker": 2}
+
+
 # ---- scan_broker_totals -----------------------------------------------------
 
 def test_scan_picks_label_then_value():

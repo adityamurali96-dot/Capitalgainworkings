@@ -6,6 +6,7 @@
 <ul>{% for e in errors %}<li class="note">{{e}}</li>{% endfor %}</ul>
 <a class="btn" href="{{url_for('home')}}">Start over</a></div>
 {% else %}
+<p class="note"><a href="{{url_for('classify_step')}}">← back to classify</a></p>
 <h2>Done — three outputs written</h2>
 <p class="sub">Saved to <span class="mono">{{out_dir}}</span>. Net gain across all buckets: <b class="mono">{{ '{:,.0f}'.format(total_gain) }}</b></p>
 
@@ -47,8 +48,9 @@
   </table></div>
   {% else %}
   <p class="sub">No broker per-lot gain column was mapped, so the engine could not be
-    cross-checked against the statement's own figures. Re-run and map the broker's
-    <b>gain / P&amp;L / capital gain</b> column on the Map screen to enable this.</p>
+    cross-checked against the statement's own figures. Go <a href="{{url_for('mapping_step')}}">back to Map</a>
+    and map the broker's <b>gain / P&amp;L / capital gain</b> column — or its separate
+    <b>short-term</b> and <b>long-term</b> gain columns — to enable this.</p>
   {% endif %}
   {% if validation.printed %}
   <p class="note" style="margin-top:10px"><b>Figures the broker already printed</b>

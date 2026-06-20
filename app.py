@@ -66,6 +66,20 @@ def _suggest_forward_fill(j: dict, automap: dict) -> bool:
     return bool(name_r is not None and date_r and name_r < 0.6 * date_r)
 
 
+def _suggest_isin_split(j: dict, automap: dict) -> bool:
+    """Propose auto-splitting a merged "name + ISIN" security column when a large
+    share of name cells carry an embedded ISIN and no separate ISIN column is
+    already populated (the common broker layout)."""
+    headers = j.get("headers", [])
+    rows = j.get("rows_below", [])
+    name_h = automap.get("security_name", {}).get("header")
+    isin_h = automap.get("isin", {}).get("header")
+    if not name_h or not rows:
+        return False
+    dict_rows = [dict(zip(headers, r)) for r in rows[:200]]
+    return detect.name_isin_merge_rate(dict_rows, name_h, isin_h) >= 0.4
+
+
 def _finalise_rows(j: dict, m: dict, forward_fill: bool) -> list[dict]:
     """Build the clean per-lot rows the engine will consume: dict-ify, optionally
     forward-fill grouped name/ISIN, then drop section-divider, total/footnote and
@@ -240,21 +254,28 @@ def pick():
         j["row_sheets"] = row_sheets
         j["selected_sheets"] = selected
         j["sheet_counts"] = sheet_counts
+        j["hdr_of"] = hdr_of          # remembered so "← Back" can restore the picks
         return redirect(url_for("mapping_step"))
 
     # GET: preview deep enough to reach each detected header; flag the sheets that
     # share the recommended sheet's structure so ST/LT splits pre-tick together.
     rec = j.get("ranked", [{}])[0] if j.get("ranked") else {}
     rec_reqset = frozenset(f for f in detect.REQUIRED if f in rec.get("automap", {}))
+    # if the preparer is stepping BACK to this screen, restore their earlier picks.
+    prev_selected = set(j.get("selected_sheets") or [])
+    prev_hdr = j.get("hdr_of") or {}
     autocheck, sheet_hdr = {}, {}
     for idx, r in enumerate(j.get("ranked", [])):
         rset = frozenset(f for f in detect.REQUIRED if f in r.get("automap", {}))
-        sheet_hdr[r["name"]] = r["header_row"]
-        autocheck[r["name"]] = (
-            (idx == 0 and r["header_row"] is not None) or
-            (r["header_row"] is not None and len(rset) >= 4 and rset == rec_reqset
-             and len(rec_reqset) >= 4)
-        )
+        sheet_hdr[r["name"]] = prev_hdr.get(r["name"], r["header_row"])
+        if prev_selected:
+            autocheck[r["name"]] = r["name"] in prev_selected
+        else:
+            autocheck[r["name"]] = (
+                (idx == 0 and r["header_row"] is not None) or
+                (r["header_row"] is not None and len(rset) >= 4 and rset == rec_reqset
+                 and len(rec_reqset) >= 4)
+            )
     deepest = max([h for h in sheet_hdr.values() if h is not None] + [0])
     plen = min(40, max(15, deepest + 4))
     preview = {sn: j["sheets"][sn][:plen] for sn in sheet_names}
@@ -281,16 +302,23 @@ def mapping_step():
             "grandfathering_basis": request.form.get("grandfathering_basis", "by_date"),
         }
         forward_fill = request.form.get("forward_fill") == "yes"
-        j["mapping"] = m; j["decl"] = decl
+        j["mapping"] = m; j["decl"] = decl; j["forward_fill"] = forward_fill
         j["data"] = _finalise_rows(j, m, forward_fill)
+        # a fresh mapping invalidates any classify choices remembered for back-nav
+        j.pop("cls_choices", None)
         return redirect(url_for("classify_step"))
     automap = detect.auto_map(j["headers"])
     counts = j.get("sheet_counts", {})
     combined = [(sn, counts.get(sn, 0)) for sn in j.get("selected_sheets", [])]
+    saved_map = j.get("mapping")          # present when stepping BACK to this screen
+    ff_default = j.get("forward_fill") if "forward_fill" in j else _suggest_forward_fill(j, automap)
     return render_template("map.html", headers=j["headers"],
                            fields=mapping.CANONICAL_FIELDS, required=mapping.REQUIRED,
+                           labels=mapping.FIELD_LABELS,
                            asset_types=sorted(compute.ASSET_TYPES),
-                           automap=automap, ff_suggest=_suggest_forward_fill(j, automap),
+                           automap=automap, ff_suggest=ff_default,
+                           saved_map=saved_map, decl=j.get("decl") or {},
+                           isin_merged=_suggest_isin_split(j, automap),
                            combined=combined)
 
 
@@ -302,17 +330,20 @@ def classify_step():
     m, decl, data = j["mapping"], j["decl"], j["data"]
 
     if request.method == "POST":
-        # collect per-row resolutions
-        resolved = []
+        # collect per-row resolutions (and remember the raw choices for "← Back")
+        resolved, choices = [], []
         for i, row in enumerate(data):
-            at = request.form.get(f"asset_{i}") or decl.get("default_asset_type")
+            sel_asset = request.form.get(f"asset_{i}") or ""
+            at = sel_asset or decl.get("default_asset_type")
             is50 = request.form.get(f"f50_{i}") == "yes"
             stt = request.form.get(f"stt_{i}") == "yes"
+            choices.append({"asset": sel_asset, "stt": stt, "f50": is50})
             cls = {"asset_type": at, "is_50aa": is50, "stt_paid": stt,
                    "basis": request.form.get(f"basis_{i}", "manual/confirmed"),
                    "confidence": request.form.get(f"conf_{i}", "manual")}
             tx, err = mapping.build_tx(row, m, decl, cls)
             resolved.append((tx, err))
+        j["cls_choices"] = choices
         j["resolved"] = resolved
         return redirect(url_for("result"))
 
@@ -321,19 +352,27 @@ def classify_step():
     fmv_col = m.get("fmv_31jan2018")
     data_sheets = j.get("data_sheets", [])
     multi_sheet = len(j.get("selected_sheets", [])) > 1
+    cls_choices = j.get("cls_choices") or []     # present when stepping BACK to this screen
     rows, gf_warn_n = [], 0
     for i, row in enumerate(data):
-        # peek name/isin using the mapping
-        name = row.get(m.get("security_name") or "", "")
-        isin_col = m.get("isin")
-        isin = row.get(isin_col, "") if isin_col else ""
+        # peek name/isin using the mapping, auto-splitting a merged "name + ISIN" cell
+        name, isin = mapping.split_name_isin(row.get(m.get("security_name") or ""),
+                                             row.get(m.get("isin") or "") if m.get("isin") else "")
+        name, isin = name or "", isin or ""
         look = isin_db.lookup(isin or None, name or None)
         at = look["asset_type"] or decl.get("default_asset_type")
+        # restore an earlier per-row choice when the preparer stepped back here
+        choice = cls_choices[i] if i < len(cls_choices) else None
+        if choice and choice.get("asset"):
+            at = choice["asset"]
         debt = (at == "mf_debt")
         # pre-fill 50AA proposal for debt rows from acquisition date
         acq = mapping.parse_date(row.get(m.get("acquisition_date") or ""))
         prop50 = bool(debt and acq and acq.toordinal() >= mapping.parse_date("2023-04-01").toordinal())
         stt_default = decl.get("default_stt_paid", at in ("equity", "eof", "business_trust"))
+        if choice is not None:
+            prop50 = choice.get("f50", prop50)
+            stt_default = choice.get("stt", stt_default)
         # grandfathering note when the acquisition date is absent (FMV-basis mode)
         gf_note, gf_warn = "", False
         if acq is None and gf_basis == "fmv":

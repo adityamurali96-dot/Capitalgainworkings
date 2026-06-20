@@ -48,9 +48,22 @@ The Flask templates live in `templates/`; the ISIN classification DB
 3. **Map & declare** — the source columns are **auto-matched** to the canonical
    fields from their header names (green = confident, amber = low-confidence
    guess); review and fix, then declare the per-source facts the engine must not
-   guess. One of those fields is optional and validation-only: `broker_gain` —
-   the broker's OWN already-computed per-lot gain / P&L / capital-gain column.
-   It is never used to compute; mapping it switches on the validation step below.
+   guess. Validation-only gain columns (never used to compute, they switch on the
+   validation step below): `broker_gain` — the broker's OWN single per-lot gain /
+   P&L / capital-gain column — **or** the separate `broker_stcg` / `broker_ltcg`
+   columns many statements print side by side (auto-detected; the engine compares a
+   lot against whichever matches its own short/long call).
+   - **other expenses on acquisition / on sale** — optional. Map
+     `purchase_expenses` (buy-side brokerage/charges) and/or `transfer_expenses`
+     (sell-side charges) only when you want them treated as deductible: acquisition
+     expenses are **added to the cost of acquisition**, sale expenses are
+     **deducted from the sale consideration**. Mapping the column is the opt-in;
+     there is no extra per-row toggle. They flow into the Winman output too (cost
+     of acquisition incl. the buy charges, with the charge shown separately).
+   - **merged ISIN + name** — when a statement crams the ISIN into the security
+     cell (e.g. `ICICI Bank Ltd - INE090A01021`), it is **auto-detected** and split:
+     the ISIN is extracted (and used for the trusted lookup) and the name is cleaned.
+     A separate ISIN column, if present and populated, still wins.
    - `cost_basis_meaning` — **raw** (engine grandfathers) vs **already-grandfathered**
      (engine suppresses FMV). This is the highest-risk silent error; it is a
      required choice.
@@ -68,6 +81,12 @@ The Flask templates live in `templates/`; the ISIN classification DB
    never reach the engine as errors; the skipped count is shown next.
 4. **Classify** — three-state gate per row:
    - `trusted` ISIN hit · `proposed` name match (confirm) · `manual` set it.
+   - **name-based fallback**: when there is no ISIN, the name is fuzzy-matched
+     against the master data (sequence + token-overlap score). A confident match
+     (≥ 80%) and a weaker one alike come back as **proposed** — the weaker one
+     flagged *low-confidence, proposed asset class only, verify* with the % shown —
+     so a near-miss no longer dumps the preparer into `manual`. Only a name with no
+     plausible match at all falls to `manual`.
    - 50AA flag shows only for debt rows, pre-filled from acquisition date
      (on/after 01-Apr-2023 → proposed Yes). "Set 50AA = No for all debt" sweep
      reports the count it changed.
@@ -79,6 +98,12 @@ The Flask templates live in `templates/`; the ISIN classification DB
      short-term); a summary warning is flashed for the red ones.
 5. **Compute & download** — Output A, Output B and Output C, plus an on-screen
    logic snapshot and a broker-vs-engine validation panel.
+
+Every stage carries a **← Back** link to the previous one and your picks are
+remembered: stepping back to Classify keeps the per-row asset/STT/50AA choices,
+back to Map keeps the column wiring and declarations, back to Sheets keeps the
+ticked sheets and header rows. (Re-submitting Map with a different wiring clears
+the remembered classify choices, since the rows themselves may change.)
 
 ## The three outputs
 
@@ -95,7 +120,10 @@ The Flask templates live in `templates/`; the ISIN classification DB
   `Units of MF except Equity fund`, `Virtual Digital Assets`.
 - Only the **input** columns are filled; grey/computed columns
   (NETSALE / COSTOFACQUISITION / SHORTTERM / LTCG) are left blank for Winman's
-  macro to finish. ACTUALCOST is raw; FMV is separate — one source of truth.
+  macro to finish. ACTUALCOST = the stated cost **plus any mapped acquisition
+  expenses** (the buy-side charges the preparer opted to deduct), with that charge
+  also shown in its own `Other acq. expenses (incl. in cost)` column so the build
+  is transparent; FMV is separate — one source of truth.
 - `Not in Winman` — foreign / unlisted / non-STT equity, for the ITR schedules.
 - Paste the data block into your live `securitiesshortGain.xlsm` (or import if
   your Winman build accepts xlsx). Lot-level with ISIN, sale date, sale
@@ -117,10 +145,13 @@ The Flask templates live in `templates/`; the ISIN classification DB
   gain, with the delta and a status; mismatches are sorted to the top as the
   chase list. Differences typically trace to grandfathering, charges/expenses,
   rounding, or a classification disagreement — all of which the preparer judges.
-- Switched on when you map the broker's gain column (`broker_gain`) on the Map
-  screen; it is auto-detected for the common formats (Zerodha `Profit`, Groww/
-  Zerodha `Realised P&L`, ICICI `Profit/Loss`, MProfit `Capital Gain`, …). With
-  no gain column mapped, the printed-figures scan still runs for reference.
+- Switched on when you map the broker's gain column on the Map screen — either the
+  single `broker_gain` column or the split `broker_stcg` / `broker_ltcg` columns
+  (each lot is compared against the one matching its own short/long call). It is
+  auto-detected for the common formats (Zerodha `Profit`, Groww/Zerodha
+  `Realised P&L`, ICICI `Profit/Loss`, MProfit `Capital Gain`, statements with
+  separate `Short Term Gain` / `Long Term Gain`, …). With no gain column mapped,
+  the printed-figures scan still runs for reference.
 
 ## AIS Reconciliation (the second menu path)
 
@@ -149,9 +180,10 @@ No tax logic — `reco.py` only sums and compares; the preparer judges every del
 - `detect.py` — the auto-detection layer, **zero I/O**. The broker-header
   synonym table (`SYNONYMS`), sheet/header detection, greedy column auto-mapping,
   and the blank-column / forward-fill / divider-row handling. Add a new broker by
-  dropping its header aliases into `SYNONYMS` — no other change. Every guess is
-  shown with confidence on the map screen and is overridable; nothing routes
-  silently.
+  dropping its header aliases into `SYNONYMS` — no other change. Also the
+  merged-ISIN-in-name helpers (`extract_isin` / `strip_isin` / `name_isin_merge_rate`)
+  that split the `name + ISIN` cell most statements use. Every guess is shown with
+  confidence on the map screen and is overridable; nothing routes silently.
 - `reco.py` — the AIS reconciliation engine, **zero I/O**. Per-security
   aggregation, ISIN/name keying, tolerance match into the four buckets.
   `writer_reco.py` renders the workbook. Tune the match tolerance in
@@ -163,16 +195,23 @@ No tax logic — `reco.py` only sums and compares; the preparer judges every del
   figures the broker already printed. `writer_validation.py` renders the workbook
   (and appends the same sheets into Output A). Tune tolerance via `TOL_ABS` /
   `TOL_PCT`; teach it a new broker's gain header by adding aliases to
-  `detect.SYNONYMS["broker_gain"]`.
+  `detect.SYNONYMS["broker_gain"]` (single column) or `["broker_stcg"]` /
+  `["broker_ltcg"]` (split short/long columns). The per-lot pick lives in
+  `compute.Result.broker_gain_used()`.
 - `tests/test_compute.py` — hand-checked. Run `python tests/test_compute.py`.
   Includes the proof that FMV is suppressed when cost is already grandfathered.
 - `tests/test_detect.py` — unit tests for the matcher, plus a corpus test that
   runs detection over `reference/*` when present. Run `python tests/test_detect.py`.
 - `tests/test_validate.py` — per-lot match/mismatch/coverage, the roll-up, and the
   printed-figure scanner. Run `python tests/test_validate.py`.
+- `tests/test_isin_db.py` — name-normalisation / fuzzy-ratio helpers, plus a
+  DB-backed check (when `isin_master.db` is present) that a near-miss name proposes
+  an asset class instead of falling to manual. Run `python tests/test_isin_db.py`.
 - `isin_db.py` — set `ISIN_DB_PATH` (or drop `isin_master.db` beside the code).
-  Schema is introspected, so differing column names are tolerated. No DB → every
-  row degrades to manual; nothing is guessed.
+  Schema is introspected, so differing column names are tolerated. ISIN hit →
+  `trusted`; no ISIN → the name is fuzzy-matched and **proposed** (with a confidence
+  %, flagged low-confidence below 80%); only a name with no plausible match at all
+  degrades to `manual`. No DB → every row degrades to manual; nothing is guessed.
 - `writer_winman.py` — column ORDER mirrors the documented machine-key row.
   Eyeball the first paste against your Winman version and tweak `SHEET1/3/5` if a
   build differs. This is the one build-specific spot.
