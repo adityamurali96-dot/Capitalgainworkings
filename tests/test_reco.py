@@ -114,6 +114,35 @@ def test_aggregate_keys_by_embedded_isin_and_cleans_name():
     assert s.value == 150 and s.n == 2 and "INE009A01021" not in s.name
 
 
+def test_real_ais_depository_descriptions_match_broker_short_names():
+    # The real AIS "Sale of securities" layout: verbose depository description with the
+    # ISIN inline and no separate ISIN column, multiple lots per security. The broker
+    # side carries clean ISINs and terse names. Every security must match on ISIN.
+    cg = agg(_rows(("ICICI Securities", "INE763G01038", "150000"),
+                   ("State Bank of India", "INE062A01020", "90000"),
+                   ("ITC Ltd", "INE154A01018", "80000")))
+    ais = agg(_rows(("ICICI SECURITIES LIMITED EQ NEW FV RS. 5/-(INE763G01038)", "", "100000"),
+                    ("ICICI SECURITIES LIMITED EQ NEW FV RS. 5/-(INE763G01038)", "", "50000"),  # 2 lots
+                    ("STATE BANK OF INDIA EQ NEW RE. 1/-(INE062A01020)", "", "90000"),
+                    ("ITC LIMITED - EQUITY SHARES OF RE.1/- AFTER SPLIT(INE154A01018)", "", "80000")))
+    r = reco.reconcile(cg, ais)
+    assert r.counts() == {"matched": 3, "mismatched": 0, "only_cg": 0, "only_ais": 0}
+    # the two ICICI lots summed to the broker's single figure, keyed by the inline ISIN
+    icici = next(p for p in r.matched if p.isin == "INE763G01038")
+    assert icici.ais_value == 150000 and icici.ais_n == 2
+    # display name is the clean issuer, not the depository blob
+    assert all("(" not in p.name and "EQ" not in p.name.split() for p in r.matched)
+
+
+def test_ais_name_only_side_still_matches_by_normalised_issuer():
+    # Defensive: if an AIS export drops the ISIN, the issuer-name normalisation
+    # (which cuts the "EQ …"/"EQUITY SHARES …" tail) still lands the match.
+    cg = agg(_rows(("Reliance Industries Ltd", "INE002A01018", "5000")))
+    ais = agg(_rows(("RELIANCE INDUSTRIES LIMITED EQ", "", "5000")))
+    r = reco.reconcile(cg, ais)
+    assert r.counts() == {"matched": 1, "mismatched": 0, "only_cg": 0, "only_ais": 0}
+
+
 def main():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

@@ -18,12 +18,11 @@ import re
 from dataclasses import dataclass, field
 
 from mapping import parse_amount  # reuse the rupee/locale-aware number parser
-from detect import extract_isin, strip_isin  # ISIN-in-free-text helpers (the AIS layout)
+from detect import extract_isin, clean_security_name  # ISIN-in-free-text + AIS name cleanup
 
 _ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
-# Corporate suffixes + generic instrument noise. AIS describes a security far more
-# verbosely than a broker's short name — it carries an "EQUITY SHARES" / "UNITS" tag,
-# a "-EQ" series code and the ISIN inline — so strip all of that to a comparable core.
+# Corporate suffixes + the residual instrument noise that survives clean_security_name
+# (which has already cut the depository "EQ …"/"EQUITY SHARES …" tail and the ISIN).
 _DROP_WORDS = re.compile(
     r"\b(LTD|LIMITED|LLP|PVT|PRIVATE|THE|INDIA|CO|COMPANY|"
     r"EQUITY|EQ|SHARES?|UNITS?|MUTUAL|FUND|SCHEME|SERIES|NSE|BSE)\b"
@@ -31,12 +30,13 @@ _DROP_WORDS = re.compile(
 
 
 def normalise_name(s) -> str:
-    """Collapse a security name to a comparable token: strip an embedded ISIN, drop
-    corporate suffixes and the generic 'EQUITY SHARES'/'UNITS'/'-EQ' instrument noise
-    AIS adds, then reduce to bare alphanumerics. The broker's terse name and the AIS
-    verbose description normalise to the same core (Reliance vs
-    'RELIANCE INDUSTRIES LIMITED-EQ-INE002A01018')."""
-    s = strip_isin(str(s or "").upper())     # drop the inline ISIN before tokenising
+    """Collapse a security name to a comparable token: first reduce a verbose AIS /
+    depository description to its issuer name (cutting the 'EQ …'/'EQUITY SHARES …'
+    tail and the embedded ISIN — see detect.clean_security_name), then drop corporate
+    suffixes and reduce to bare alphanumerics. The broker's terse name and the AIS
+    description land on the same core ('Reliance Industries Ltd' and
+    'RELIANCE INDUSTRIES LIMITED EQ ...(INE002A01018)' both → 'RELIANCEINDUSTRIES')."""
+    s = clean_security_name(s).upper()
     s = _DROP_WORDS.sub(" ", s)
     return re.sub(r"[^A-Z0-9]", "", s)
 
@@ -84,7 +84,7 @@ def aggregate(rows: list[dict], name_col, isin_col, value_col, qty_col) -> dict[
         key, kind = reco_key(isin, nm)
         if not key:
             continue
-        disp = strip_isin(nm) or nm          # show the clean name, not the ISIN-laden blob
+        disp = clean_security_name(nm) or nm  # show the issuer, not the ISIN-laden blob
         s = out.get(key)
         if s is None:
             out[key] = Side(key=key, kind=kind, name=disp,

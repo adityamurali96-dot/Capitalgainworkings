@@ -139,6 +139,35 @@ def test_strip_isin_cleans_name_only_when_present():
     assert detect.strip_isin("HDFC Ltd / Bonus") == "HDFC Ltd / Bonus"
 
 
+def test_clean_security_name_strips_ais_depository_boilerplate():
+    # AIS / depository "Sale of securities" descriptions: issuer + instrument tail + ISIN.
+    c = detect.clean_security_name
+    assert c("ICICI SECURITIES LIMITED EQ NEW FV RS. 5/-(INE763G01038)") == "ICICI SECURITIES LIMITED"
+    assert c("ITC LIMITED - EQUITY SHARES OF RE.1/- AFTER SPLIT(INE154A01018)") == "ITC LIMITED"
+    assert c("LUPIN LIMITED-NEW EQUITY SHARES OF RS. 2/- AFTER SUB-DIVISION(INE326A01037)") == "LUPIN LIMITED"
+    assert c("MPHASIS LIMITED EQUITY SHARES(INE356A01018)") == "MPHASIS LIMITED"
+    # short words inside a real name survive (cut is at a whole-word EQ/EQUITY SHARES marker)
+    assert c("STATE BANK OF INDIA EQ NEW RE. 1/-(INE062A01020)") == "STATE BANK OF INDIA"
+    assert c("EQUITAS SMALL FINANCE BANK LIMITED EQ(INE063P01018)") == "EQUITAS SMALL FINANCE BANK LIMITED"
+    assert c("THE NEW INDIA ASSURANCE COMPANY LIMITED EQ(INE470Y01017)") == "THE NEW INDIA ASSURANCE COMPANY LIMITED"
+    # a mutual-fund scheme that merely contains the word "Equity" is NOT truncated
+    assert c("SBI Equity Hybrid Fund - Direct Plan - Growth") == "SBI Equity Hybrid Fund - Direct Plan - Growth"
+
+
+def test_ais_sale_header_auto_maps_sales_consideration_not_per_unit_rate():
+    # The depository detail header. "SALES CONSIDERATION" (plural) is the total; the
+    # per-unit "SALE PRICE PER UNIT" must be ignored, not read as the total.
+    hdrs = ["SR.NO.", "DATE OF SALE/TRANSFER", "SECURITY NAME (SECURITY CODE)",
+            "SECURITY CLASS", "QUANTITY", "SALE PRICE PER UNIT", "SALES CONSIDERATION",
+            "COST OF ACQUISITION", "UNIT FMV", "FAIR MARKET VALUE", "STATUS"]
+    mp = detect.auto_map(hdrs)
+    assert mp["sale_consideration"]["header"] == "SALES CONSIDERATION"
+    assert mp["security_name"]["header"] == "SECURITY NAME (SECURITY CODE)"
+    assert mp["transfer_date"]["header"] == "DATE OF SALE/TRANSFER"
+    used = {i["header"] for i in mp.values()}
+    assert "SALE PRICE PER UNIT" not in used
+
+
 def test_name_isin_merge_rate_flags_merged_layout():
     merged = [{"name": "INFY INE009A01021"}, {"name": "TCS INE467B01029"},
               {"name": "WIPRO INE075A01022"}]

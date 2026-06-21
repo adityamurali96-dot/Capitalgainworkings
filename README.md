@@ -187,13 +187,21 @@ matched:
 
 - **key**: the ISIN is the only field AIS and the broker reliably share, so it is
   tried hard — a clean ISIN cell first, then an ISIN **embedded** in the ISIN cell
-  (`INE002A01018-EQ`), then one **buried in the security description** (the common AIS
-  layout, where the depository reports `NAME … ISIN` in one verbose free-text column).
-  Only when no ISIN can be recovered does it fall back to the normalised name — and
-  the normaliser now strips the inline ISIN and the `EQUITY SHARES` / `UNITS` / `-EQ`
-  noise AIS adds, so `RELIANCE INDUSTRIES LIMITED-EQ-INE002A01018` and a broker's terse
-  `Reliance Industries Ltd` collapse to the same core. This is what makes AIS's very
-  different security descriptions match the broker file accurately.
+  (`INE763G01038-EQ`), then one **buried in the security description** (the real AIS
+  layout: the depository reports a verbose `SECURITY NAME (SECURITY CODE)` column such
+  as `ICICI SECURITIES LIMITED EQ NEW FV RS. 5/-(INE763G01038)`, with the ISIN in the
+  trailing parentheses). Only when no ISIN can be recovered does it fall back to the
+  normalised name — and the normaliser reduces a description to its **issuer name** by
+  cutting the instrument tail at the `EQ` / `EQUITY SHARES` marker (so
+  `ITC LIMITED - EQUITY SHARES OF RE.1/- AFTER SPLIT` and a broker's terse `ITC Ltd`
+  collapse to the same core, while real names that merely contain short words —
+  `STATE BANK OF INDIA`, `EQUITAS SMALL FINANCE BANK` — and MF schemes that contain the
+  word "Equity" stay intact). This is what makes AIS's very different security
+  descriptions match the broker file accurately. The result rows show the clean issuer
+  name, not the depository blob.
+- **columns**: the depository detail header is auto-detected too — the total sale
+  figure sits in a `SALES CONSIDERATION` (plural) column, distinct from the per-unit
+  `SALE PRICE PER UNIT` rate, which the rate-token guard keeps out.
 - **tolerance**: matched if values agree within ₹1 or 1% (absorbs AIS rounding).
 - **buckets**: matched · mismatched (chase the delta) · only-in-CG · only-in-AIS
   (a sale that may be missing from your file). On-screen plus a downloadable
@@ -211,8 +219,12 @@ No tax logic — `reco.py` only sums and compares; the preparer judges every del
   and the blank-column / forward-fill / divider-row handling. Add a new broker by
   dropping its header aliases into `SYNONYMS` — no other change. Also the
   merged-ISIN-in-name helpers (`extract_isin` / `strip_isin` / `name_isin_merge_rate`)
-  that split the `name + ISIN` cell most statements use. Every guess is shown with
-  confidence on the map screen and is overridable; nothing routes silently.
+  that split the `name + ISIN` cell most statements use, plus `clean_security_name`,
+  which reduces a verbose AIS / depository description (`… EQ NEW FV RS. 5/-(ISIN)`,
+  `… EQUITY SHARES OF RE.1/- AFTER SPLIT`) to its issuer name by cutting at the
+  `EQ` / `EQUITY SHARES` marker — the basis for the AIS name match and display. Every
+  guess is shown with confidence on the map screen and is overridable; nothing routes
+  silently.
 - `reco.py` — the AIS reconciliation engine, **zero I/O**. Per-security
   aggregation, ISIN/name keying, tolerance match into the four buckets.
   `reco_key` recovers an ISIN even when AIS buries it in the security description
