@@ -45,8 +45,12 @@ SYNONYMS: dict[str, list[str]] = {
         "asset name", "scheme name", "fund name", "company name", "particulars",
         "name of security", "name of the security", "name of the asset",
         "scheme", "security", "symbol", "name of the company", "instrument",
+        # AIS / TIS phrasings — the depository reports a long free-text description.
+        "description of security", "security description", "name of security description",
+        "description of the security", "name of the company scheme", "security name description",
     ],
-    "isin": ["isin no", "isin number", "isin code", "isin"],
+    "isin": ["isin of the security", "isin of security", "isin no", "isin number",
+             "isin code", "isin"],
     "quantity": [
         "sale quantity", "qty sold", "qty. sold", "quantity", "units", "no of units",
         "no. of units", "current units", "no of shares", "qty",
@@ -77,6 +81,9 @@ SYNONYMS: dict[str, list[str]] = {
         "sell amt", "full value of consideration", "full value", "redemption amount",
         "sale proceeds", "net value", "transaction value", "reported value",
         "total sale value", "amount",
+        # AIS / TIS phrasings for the reported sale figure.
+        "sale consideration value", "sale consideration amount", "total sale consideration",
+        "value of transaction", "transaction amount",
     ],
     "transfer_expenses": [
         "sale expenses", "sell charges", "transfer expenses", "sale charges",

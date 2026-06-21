@@ -11,7 +11,9 @@ then name).</p>
   <form action="{{url_for('ais')}}" method="post" enctype="multipart/form-data">
     <label class="fld"><b>Capital-gains / broker file</b>
       <input type="file" name="cg_file" accept=".xlsx,.xls,.csv,.tsv" required>
-      <span class="note">The same kind of statement you'd feed to Capital Gain Summary (Zerodha, Groww, CAMS, …).</span>
+      <span class="note">The same kind of statement you'd feed to Capital Gain Summary (Zerodha, Groww, CAMS, …).
+      <b>Best:</b> the <span class="mono">*_AIS_Input.xlsx</span> (Output D) the Capital Gain Summary
+      produces — it is already ISIN-keyed, so the match is cleanest.</span>
     </label>
     <label class="fld"><b>AIS file</b>
       <input type="file" name="ais_file" accept=".xlsx,.xls,.csv,.tsv" required>

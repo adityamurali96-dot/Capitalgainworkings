@@ -7,15 +7,19 @@
 <a class="btn" href="{{url_for('home')}}">Start over</a></div>
 {% else %}
 <p class="note"><a href="{{url_for('classify_step')}}">← back to classify</a></p>
-<h2>Done — three outputs written</h2>
+<h2>Done — four outputs written</h2>
 <p class="sub">Saved to <span class="mono">{{out_dir}}</span>. Net gain across all buckets: <b class="mono">{{ '{:,.0f}'.format(total_gain) }}</b></p>
 
 <div class="card">
   <a class="btn" href="{{url_for('download', which='summary')}}">⬇ Output A — CG Summary + Workings + COI + Validation</a>
   <a class="btn" href="{{url_for('download', which='winman')}}">⬇ Output B — Winman (xlsx)</a>
   <a class="btn alt" href="{{url_for('download', which='validation')}}">⬇ Output C — Validation (broker vs engine)</a>
+  <a class="btn alt" href="{{url_for('download', which='ais_input')}}">⬇ Output D — AIS Reco Input (feed to AIS Reconciliation)</a>
   <p class="note" style="margin-top:12px">Winman routing:
     {% for s,c in counts.items() %}<b>{{s}}</b>: {{c}} &nbsp; {% endfor %}</p>
+  <p class="note">Output D is the clean, ISIN-keyed sale side. Take it to
+    <a href="{{url_for('ais')}}">AIS Reconciliation</a> as the broker/CG file — its columns
+    are already canonical, so the match keys on ISIN with nothing lost to a name mismatch.</p>
 </div>
 
 {% if validation %}
@@ -93,9 +97,11 @@
 <div class="disc">
 Output B carries only the input columns Winman needs (computed cells left blank) in
 Winman's column order. Paste the data block into your live <i>securitiesshortGain.xlsm</i>
-and let the macro finish the gain columns — keeping one source of truth. Either output
-is lot-level with ISIN, sale date, sale consideration and quantity intact, so the AIS
-reco can consume it downstream.
+and let the macro finish the gain columns — keeping one source of truth.
+<b>Output D</b> is the purpose-built AIS feed: the same lot-level sale side with ISIN,
+sale date, gross sale consideration and quantity under canonical headers (plus a
+per-ISIN "TIS view" to eyeball against AIS totals), so the AIS reconciliation consumes
+it directly and keys on ISIN.
 </div>
 <a class="btn alt" href="{{url_for('home')}}">Process another source</a>
 {% endif %}

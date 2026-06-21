@@ -18,23 +18,43 @@ import re
 from dataclasses import dataclass, field
 
 from mapping import parse_amount  # reuse the rupee/locale-aware number parser
+from detect import extract_isin, strip_isin  # ISIN-in-free-text helpers (the AIS layout)
 
 _ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
-_DROP_WORDS = re.compile(r"\b(LTD|LIMITED|LLP|PVT|PRIVATE|THE|INDIA|CO|COMPANY)\b")
+# Corporate suffixes + generic instrument noise. AIS describes a security far more
+# verbosely than a broker's short name — it carries an "EQUITY SHARES" / "UNITS" tag,
+# a "-EQ" series code and the ISIN inline — so strip all of that to a comparable core.
+_DROP_WORDS = re.compile(
+    r"\b(LTD|LIMITED|LLP|PVT|PRIVATE|THE|INDIA|CO|COMPANY|"
+    r"EQUITY|EQ|SHARES?|UNITS?|MUTUAL|FUND|SCHEME|SERIES|NSE|BSE)\b"
+)
 
 
 def normalise_name(s) -> str:
-    """Collapse a security name to a comparable token (drop suffixes, punctuation)."""
-    s = str(s or "").upper()
+    """Collapse a security name to a comparable token: strip an embedded ISIN, drop
+    corporate suffixes and the generic 'EQUITY SHARES'/'UNITS'/'-EQ' instrument noise
+    AIS adds, then reduce to bare alphanumerics. The broker's terse name and the AIS
+    verbose description normalise to the same core (Reliance vs
+    'RELIANCE INDUSTRIES LIMITED-EQ-INE002A01018')."""
+    s = strip_isin(str(s or "").upper())     # drop the inline ISIN before tokenising
     s = _DROP_WORDS.sub(" ", s)
     return re.sub(r"[^A-Z0-9]", "", s)
 
 
 def reco_key(isin, name) -> tuple[str, str]:
-    """(key, kind): a valid ISIN if present, else the normalised name."""
+    """(key, kind): a valid ISIN if present, else the normalised name.
+
+    The ISIN is the only field AIS and the broker reliably share, so it is tried hard:
+    a clean ISIN cell first, then an ISIN *embedded* in the ISIN cell (e.g.
+    'INE002A01018-EQ'), then one embedded in the security description (the common AIS
+    layout, where the depository reports 'NAME ... ISIN' in one free-text column).
+    Only when no ISIN can be recovered does it fall back to the normalised name."""
     iv = str(isin or "").strip().upper()
     if _ISIN.match(iv):
         return iv, "isin"
+    emb = extract_isin(iv) or extract_isin(name)
+    if emb:
+        return emb, "isin"
     return normalise_name(name), "name"
 
 
@@ -64,17 +84,18 @@ def aggregate(rows: list[dict], name_col, isin_col, value_col, qty_col) -> dict[
         key, kind = reco_key(isin, nm)
         if not key:
             continue
+        disp = strip_isin(nm) or nm          # show the clean name, not the ISIN-laden blob
         s = out.get(key)
         if s is None:
-            out[key] = Side(key=key, kind=kind, name=nm,
-                            isin=isin.upper() if kind == "isin" else "",
+            out[key] = Side(key=key, kind=kind, name=disp,
+                            isin=key if kind == "isin" else "",
                             value=val, qty=qty, n=1)
         else:
             s.value += val
             s.qty += qty
             s.n += 1
-            if not s.name and nm:
-                s.name = nm
+            if not s.name and disp:
+                s.name = disp
     return out
 
 

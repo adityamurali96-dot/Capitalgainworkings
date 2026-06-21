@@ -19,6 +19,7 @@ from writer_summary import write_summary
 from writer_winman import write_winman
 from writer_reco import write_reco
 from writer_validation import write_validation
+from writer_ais_input import write_ais_input
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("CG_SECRET", "cg-engine-local-dev")
@@ -418,6 +419,7 @@ def result():
     sfile = os.path.join(OUT_DIR, f"{base}_CG_Summary.xlsx")
     wfile = os.path.join(OUT_DIR, f"{base}_Winman.xlsx")
     vfile = os.path.join(OUT_DIR, f"{base}_Validation.xlsx")
+    afile = os.path.join(OUT_DIR, f"{base}_AIS_Input.xlsx")
     # validation: compare the engine against the broker's own already-stated figures
     vres = validate.build_validation(results)
     vres.printed = validate.scan_broker_totals(j.get("sheets", {}))
@@ -425,11 +427,14 @@ def result():
                   validation=vres)
     _, counts = write_winman(results, wfile)
     write_validation(vres, vfile, client=client)
+    # Output D: the clean, ISIN-keyed sale side, ready to feed into AIS Reconciliation.
+    write_ais_input(results, afile, client=client)
     j["results"] = results
     return render_template("result.html", ok=True, errors=errors, results=results,
                            counts=counts, summary_file=os.path.basename(sfile),
                            winman_file=os.path.basename(wfile),
                            validation_file=os.path.basename(vfile),
+                           ais_input_file=os.path.basename(afile),
                            validation=vres, v_counts=vres.counts(),
                            total_gain=round(sum(r.gain for r in results), 2),
                            out_dir=OUT_DIR)
@@ -441,7 +446,7 @@ def download(which):
     client = j.get("decl", {}).get("source_label", "client")
     base = "".join(c for c in client if c.isalnum() or c in " _-").strip() or "client"
     names = {"summary": f"{base}_CG_Summary.xlsx", "winman": f"{base}_Winman.xlsx",
-             "validation": f"{base}_Validation.xlsx"}
+             "validation": f"{base}_Validation.xlsx", "ais_input": f"{base}_AIS_Input.xlsx"}
     fn = names.get(which, names["summary"])
     path = os.path.join(OUT_DIR, fn)
     if not os.path.exists(path):
