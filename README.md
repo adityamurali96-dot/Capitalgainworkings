@@ -3,13 +3,16 @@
 Two tools behind one menu (pick one at the start screen):
 
 1. **Capital Gain Summary** — map once → classify → compute deterministically →
-   three writers. One canonical table feeds the firm CG Summary (Output A), the
-   Winman import file (Output B), and a broker-vs-engine validation sheet
-   (Output C) that ties the engine back to the gains the statement already states.
+   four writers. One canonical table feeds the firm CG Summary (Output A), the
+   Winman import file (Output B), a broker-vs-engine validation sheet
+   (Output C) that ties the engine back to the gains the statement already states,
+   and a clean, ISIN-keyed sale side (Output D) purpose-built to feed AIS
+   Reconciliation.
 2. **AIS Reconciliation** — upload a capital-gains/broker file **and** the AIS
    statement; columns are auto-detected and sale values are matched per security
    to surface matched / mismatched / only-in-CG / only-in-AIS. Standalone — it
-   does not require running the summary first.
+   does not require running the summary first, but feeding it **Output D** from the
+   summary gives the cleanest match (the sale side is already ISIN-keyed).
 
 This is a tool. It surfaces the classification basis and the full gain logic for
 every row so the preparer can verify them. Responsibility for the figures and the
@@ -96,8 +99,8 @@ The Flask templates live in `templates/`; the ISIN classification DB
    - under FMV-based grandfathering, rows missing an acquisition date carry a
      **GF** note: green (FMV present → grandfathered long-term) or red (no FMV →
      short-term); a summary warning is flashed for the red ones.
-5. **Compute & download** — Output A, Output B and Output C, plus an on-screen
-   logic snapshot and a broker-vs-engine validation panel.
+5. **Compute & download** — Output A, Output B, Output C and Output D, plus an
+   on-screen logic snapshot and a broker-vs-engine validation panel.
 
 Every stage carries a **← Back** link to the previous one and your picks are
 remembered: stepping back to Classify keeps the per-row asset/STT/50AA choices,
@@ -105,7 +108,7 @@ back to Map keeps the column wiring and declarations, back to Sheets keeps the
 ticked sheets and header rows. (Re-submitting Map with a different wiring clears
 the remembered classify choices, since the rows themselves may change.)
 
-## The three outputs
+## The four outputs
 
 **Output A — `*_CG_Summary.xlsx`** (Arial 11)
 - `CG Summary` — six buckets + totals, COI-feeding.
@@ -153,6 +156,24 @@ the remembered classify choices, since the rows themselves may change.)
   separate `Short Term Gain` / `Long Term Gain`, …). With no gain column mapped,
   the printed-figures scan still runs for reference.
 
+**Output D — `*_AIS_Input.xlsx`** (Arial 11) — the AIS reconciliation feed
+- The engine's clean SALE side, shaped to drop **straight into AIS Reconciliation**
+  as the "capital-gains / broker file". Re-uploading the raw broker statement there
+  means re-detecting its messy columns and verbose names; feeding this file instead
+  hands the reconciliation a pristine, **ISIN-keyed** sale side, so every lot matches
+  its AIS line by ISIN with nothing lost to a name mismatch.
+- `AIS Reco Input` — lot-level: ISIN, security name, asset class, sale date, quantity,
+  and the **gross** sale consideration (what the depository reports to AIS — not net of
+  the broker's charges, so it lines up with the AIS figure). The headers are the
+  canonical ones the detector knows, so the AIS path auto-maps it with no override.
+- `By ISIN (TIS view)` — the same totalled per security (keyed exactly as the reco will
+  key it), to eyeball directly against AIS's / TIS's per-ISIN sale figures before you
+  even run the match.
+- `Not in AIS securities` — foreign, unlisted and VDA sales **set aside** (with the
+  reason): they are reported in a different AIS section, or not by the Indian
+  depositories at all, so they would only show as spurious "only in CG" noise. Nothing
+  is dropped silently — they are listed, just not fed into the securities reco.
+
 ## AIS Reconciliation (the second menu path)
 
 Upload two files — the capital-gains/broker file and the AIS statement. Both are
@@ -164,7 +185,23 @@ value / ISIN / security name / quantity before matching (the auto-detected wirin
 is pre-selected). Both sides are then reduced to **sale value per security** and
 matched:
 
-- **key**: valid ISIN first; a name-only side is rescued by normalised name.
+- **key**: the ISIN is the only field AIS and the broker reliably share, so it is
+  tried hard — a clean ISIN cell first, then an ISIN **embedded** in the ISIN cell
+  (`INE763G01038-EQ`), then one **buried in the security description** (the real AIS
+  layout: the depository reports a verbose `SECURITY NAME (SECURITY CODE)` column such
+  as `ICICI SECURITIES LIMITED EQ NEW FV RS. 5/-(INE763G01038)`, with the ISIN in the
+  trailing parentheses). Only when no ISIN can be recovered does it fall back to the
+  normalised name — and the normaliser reduces a description to its **issuer name** by
+  cutting the instrument tail at the `EQ` / `EQUITY SHARES` marker (so
+  `ITC LIMITED - EQUITY SHARES OF RE.1/- AFTER SPLIT` and a broker's terse `ITC Ltd`
+  collapse to the same core, while real names that merely contain short words —
+  `STATE BANK OF INDIA`, `EQUITAS SMALL FINANCE BANK` — and MF schemes that contain the
+  word "Equity" stay intact). This is what makes AIS's very different security
+  descriptions match the broker file accurately. The result rows show the clean issuer
+  name, not the depository blob.
+- **columns**: the depository detail header is auto-detected too — the total sale
+  figure sits in a `SALES CONSIDERATION` (plural) column, distinct from the per-unit
+  `SALE PRICE PER UNIT` rate, which the rate-token guard keeps out.
 - **tolerance**: matched if values agree within ₹1 or 1% (absorbs AIS rounding).
 - **buckets**: matched · mismatched (chase the delta) · only-in-CG · only-in-AIS
   (a sale that may be missing from your file). On-screen plus a downloadable
@@ -182,12 +219,26 @@ No tax logic — `reco.py` only sums and compares; the preparer judges every del
   and the blank-column / forward-fill / divider-row handling. Add a new broker by
   dropping its header aliases into `SYNONYMS` — no other change. Also the
   merged-ISIN-in-name helpers (`extract_isin` / `strip_isin` / `name_isin_merge_rate`)
-  that split the `name + ISIN` cell most statements use. Every guess is shown with
-  confidence on the map screen and is overridable; nothing routes silently.
+  that split the `name + ISIN` cell most statements use, plus `clean_security_name`,
+  which reduces a verbose AIS / depository description (`… EQ NEW FV RS. 5/-(ISIN)`,
+  `… EQUITY SHARES OF RE.1/- AFTER SPLIT`) to its issuer name by cutting at the
+  `EQ` / `EQUITY SHARES` marker — the basis for the AIS name match and display. Every
+  guess is shown with confidence on the map screen and is overridable; nothing routes
+  silently.
 - `reco.py` — the AIS reconciliation engine, **zero I/O**. Per-security
   aggregation, ISIN/name keying, tolerance match into the four buckets.
+  `reco_key` recovers an ISIN even when AIS buries it in the security description
+  (via `detect.extract_isin`), and `normalise_name` strips that inline ISIN plus the
+  `EQUITY SHARES`/`UNITS`/`-EQ` noise so the name fallback still lands — the two changes
+  that make AIS's verbose descriptions reconcile against a broker's terse names.
   `writer_reco.py` renders the workbook. Tune the match tolerance in
-  `reco.reconcile` (`tol_abs`, `tol_pct`).
+  `reco.reconcile` (`tol_abs`, `tol_pct`); widen the name normaliser's drop-list in
+  `reco._DROP_WORDS`.
+- `writer_ais_input.py` — Output D, the AIS reconciliation feed. The engine's clean
+  sale side (lot-level + a per-ISIN TIS view), gated to the asset classes AIS's
+  "Sale of securities and units of mutual fund" actually reports (listed equity,
+  equity/other MF units, business trusts, non-equity MF/debt), with foreign / unlisted
+  / VDA set aside on their own sheet. Canonical headers, so the AIS path auto-detects it.
 - `validate.py` — the broker-vs-engine validation, **zero I/O**. `build_validation`
   compares the engine's per-lot gain against the broker's own `broker_gain` column
   (per-lot, per-bucket, short/long/total roll-up, apples-to-apples over covered

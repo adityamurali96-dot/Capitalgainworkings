@@ -18,23 +18,43 @@ import re
 from dataclasses import dataclass, field
 
 from mapping import parse_amount  # reuse the rupee/locale-aware number parser
+from detect import extract_isin, clean_security_name  # ISIN-in-free-text + AIS name cleanup
 
 _ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
-_DROP_WORDS = re.compile(r"\b(LTD|LIMITED|LLP|PVT|PRIVATE|THE|INDIA|CO|COMPANY)\b")
+# Corporate suffixes + the residual instrument noise that survives clean_security_name
+# (which has already cut the depository "EQ …"/"EQUITY SHARES …" tail and the ISIN).
+_DROP_WORDS = re.compile(
+    r"\b(LTD|LIMITED|LLP|PVT|PRIVATE|THE|INDIA|CO|COMPANY|"
+    r"EQUITY|EQ|SHARES?|UNITS?|MUTUAL|FUND|SCHEME|SERIES|NSE|BSE)\b"
+)
 
 
 def normalise_name(s) -> str:
-    """Collapse a security name to a comparable token (drop suffixes, punctuation)."""
-    s = str(s or "").upper()
+    """Collapse a security name to a comparable token: first reduce a verbose AIS /
+    depository description to its issuer name (cutting the 'EQ …'/'EQUITY SHARES …'
+    tail and the embedded ISIN — see detect.clean_security_name), then drop corporate
+    suffixes and reduce to bare alphanumerics. The broker's terse name and the AIS
+    description land on the same core ('Reliance Industries Ltd' and
+    'RELIANCE INDUSTRIES LIMITED EQ ...(INE002A01018)' both → 'RELIANCEINDUSTRIES')."""
+    s = clean_security_name(s).upper()
     s = _DROP_WORDS.sub(" ", s)
     return re.sub(r"[^A-Z0-9]", "", s)
 
 
 def reco_key(isin, name) -> tuple[str, str]:
-    """(key, kind): a valid ISIN if present, else the normalised name."""
+    """(key, kind): a valid ISIN if present, else the normalised name.
+
+    The ISIN is the only field AIS and the broker reliably share, so it is tried hard:
+    a clean ISIN cell first, then an ISIN *embedded* in the ISIN cell (e.g.
+    'INE002A01018-EQ'), then one embedded in the security description (the common AIS
+    layout, where the depository reports 'NAME ... ISIN' in one free-text column).
+    Only when no ISIN can be recovered does it fall back to the normalised name."""
     iv = str(isin or "").strip().upper()
     if _ISIN.match(iv):
         return iv, "isin"
+    emb = extract_isin(iv) or extract_isin(name)
+    if emb:
+        return emb, "isin"
     return normalise_name(name), "name"
 
 
@@ -64,17 +84,18 @@ def aggregate(rows: list[dict], name_col, isin_col, value_col, qty_col) -> dict[
         key, kind = reco_key(isin, nm)
         if not key:
             continue
+        disp = clean_security_name(nm) or nm  # show the issuer, not the ISIN-laden blob
         s = out.get(key)
         if s is None:
-            out[key] = Side(key=key, kind=kind, name=nm,
-                            isin=isin.upper() if kind == "isin" else "",
+            out[key] = Side(key=key, kind=kind, name=disp,
+                            isin=key if kind == "isin" else "",
                             value=val, qty=qty, n=1)
         else:
             s.value += val
             s.qty += qty
             s.n += 1
-            if not s.name and nm:
-                s.name = nm
+            if not s.name and disp:
+                s.name = disp
     return out
 
 

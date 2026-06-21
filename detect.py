@@ -45,8 +45,12 @@ SYNONYMS: dict[str, list[str]] = {
         "asset name", "scheme name", "fund name", "company name", "particulars",
         "name of security", "name of the security", "name of the asset",
         "scheme", "security", "symbol", "name of the company", "instrument",
+        # AIS / TIS phrasings — the depository reports a long free-text description.
+        "description of security", "security description", "name of security description",
+        "description of the security", "name of the company scheme", "security name description",
     ],
-    "isin": ["isin no", "isin number", "isin code", "isin"],
+    "isin": ["isin of the security", "isin of security", "isin no", "isin number",
+             "isin code", "isin"],
     "quantity": [
         "sale quantity", "qty sold", "qty. sold", "quantity", "units", "no of units",
         "no. of units", "current units", "no of shares", "qty",
@@ -77,6 +81,12 @@ SYNONYMS: dict[str, list[str]] = {
         "sell amt", "full value of consideration", "full value", "redemption amount",
         "sale proceeds", "net value", "transaction value", "reported value",
         "total sale value", "amount",
+        # AIS / TIS phrasings for the reported sale figure. The depository column is
+        # literally "SALES CONSIDERATION" (plural) — distinct from the per-unit
+        # "SALE PRICE PER UNIT" rate, which the rate-token guard keeps out.
+        "sales consideration", "sales consideration value", "sale consideration value",
+        "sale consideration amount", "total sale consideration",
+        "value of transaction", "transaction amount",
     ],
     "transfer_expenses": [
         "sale expenses", "sell charges", "transfer expenses", "sale charges",
@@ -339,6 +349,31 @@ def strip_isin(name) -> str:
     s = re.sub(r"[\-/|:()\[\]]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip(" -:/|")
     return s.strip()
+
+
+# Instrument-description boilerplate the depositories / AIS append AFTER the issuer
+# name in the "Sale of securities" report, e.g.
+#   "ICICI SECURITIES LIMITED EQ NEW FV RS. 5/-(INE763G01038)"
+#   "ITC LIMITED - EQUITY SHARES OF RE.1/- AFTER SPLIT(INE154A01018)"
+#   "STATE BANK OF INDIA EQ NEW RE. 1/-(INE062A01020)"
+# The issuer name always comes first and the descriptor begins at a standalone "EQ"
+# abbreviation or an "EQUITY SHARE(S)" phrase, so cutting there recovers the issuer
+# cleanly. Whole-word markers leave real names that merely *contain* short words intact
+# ("STATE BANK OF INDIA", "EQUITAS SMALL FINANCE BANK") and never truncate a mutual-fund
+# scheme whose name contains the word "Equity" (it carries no "EQ" / "EQUITY SHARES"
+# marker — it reads "... Equity Fund").
+_AIS_TAIL = re.compile(r"[\s\-–,]*\b(?:NEW\s+)?(?:EQ|EQUITY\s+SHARES?)\b.*$", re.I)
+
+
+def clean_security_name(text) -> str:
+    """Reduce a depository / AIS security description to the issuer name: drop an
+    embedded ISIN, then cut the trailing instrument descriptor at its 'EQ' / 'EQUITY
+    SHARES' marker. Bonds and MF units (no such marker) keep their full name minus the
+    ISIN. Makes AIS's verbose descriptions comparable to a broker's short name, and
+    gives a clean name to show on the reconciliation."""
+    s = strip_isin(str(text or ""))
+    s = _AIS_TAIL.sub("", s)
+    return re.sub(r"\s+", " ", s).strip(" -–,").strip()
 
 
 def name_isin_merge_rate(rows: list[dict], name_col: str, isin_col: str | None) -> float:
