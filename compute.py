@@ -31,6 +31,35 @@ GF_CUTOFF = date(2018, 2, 1)       # grandfathering applies to lots acquired BEF
 # asset_type vocabulary
 ASSET_TYPES = {"equity", "eof", "business_trust", "mf_debt", "vda", "foreign", "unlisted"}
 
+# Asset classes whose SALE ordinarily suffers Securities Transaction Tax (STT):
+# listed equity shares, equity-oriented MF units and business-trust (REIT/InvIT)
+# units all trade on a recognised exchange, so STT is collected on transfer and
+# they route through 111A/112A. Everything else — specifically UNLISTED equity,
+# foreign shares, debt/MF-debt and VDA — does not attract STT on sale. This is the
+# basis for the "most equity suffers STT unless it is specifically unlisted" rule:
+# the asset class (driven by the ISIN/name classification) decides STT, so the
+# preparer only overrides the genuine off-market exception.
+STT_ASSET_TYPES = frozenset({"equity", "eof", "business_trust"})
+
+
+def stt_default_for(asset_type) -> bool:
+    """Whether a sale of this asset class ordinarily suffers STT (see STT_ASSET_TYPES).
+    Listed equity / EOF / business trust -> True; unlisted, foreign, debt, VDA -> False."""
+    return asset_type in STT_ASSET_TYPES
+
+
+def resolve_stt(stt_basis, asset_type) -> bool:
+    """Resolve the STT flag from a per-source basis declaration:
+      "yes"  -> force STT paid (whole source is on-market)
+      "no"   -> force no STT  (whole source is off-market / unlisted)
+      "auto" -> derive from the asset class (the default; ISIN/classification-driven).
+    Unknown / missing basis falls back to the auto (asset-class) derivation."""
+    if stt_basis == "yes":
+        return True
+    if stt_basis == "no":
+        return False
+    return stt_default_for(asset_type)
+
 # LTCG month thresholds
 TH_EQUITY = 12        # equity / EOF / business trust
 TH_OTHER_POST = 24    # non-equity financial assets, transfer on/after 23-Jul-2024

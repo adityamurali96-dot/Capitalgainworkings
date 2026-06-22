@@ -6,18 +6,19 @@
 <div class="grid">
   <div class="card">
     <h3 style="margin-top:0">Capital Gain Summary</h3>
-    <p class="note">Upload one broker / AMC statement → auto-map the columns →
-    classify → compute. Produces <b>Output A</b> (CG Summary + Workings + COI),
-    <b>Output B</b> (Winman import), <b>Output C</b> (broker-vs-engine validation)
+    <p class="note">Upload one or more broker / AMC statements → map each → classify →
+    compute, consolidated into one run. Produces <b>Output A</b> (CG Summary + Workings +
+    COI), <b>Output B</b> (Winman import), <b>Output C</b> (broker-vs-engine validation)
     and <b>Output D</b> (clean, ISIN-keyed sale side for AIS Reconciliation).</p>
     <p style="margin-bottom:0"><a class="btn" href="{{url_for('cg_home')}}">Capital Gain Summary →</a></p>
   </div>
 
   <div class="card">
     <h3 style="margin-top:0">AIS Reconciliation</h3>
-    <p class="note">Upload your capital-gains / broker file <b>and</b> the AIS
-    statement. Columns are auto-detected; sale values are matched per security
-    (ISIN, then name) to show <b>matched · mismatched · only-in-CG · only-in-AIS</b>.</p>
+    <p class="note">Upload your capital-gains / broker file(s) <b>and</b> the single AIS
+    statement. Columns are auto-detected; sale values are pooled per security across every
+    broker file and matched (ISIN, then name) to show
+    <b>matched · mismatched · only-in-CG · only-in-AIS</b>.</p>
     <p style="margin-bottom:0"><a class="btn" href="{{url_for('ais')}}">AIS Reconciliation →</a></p>
   </div>
 </div>

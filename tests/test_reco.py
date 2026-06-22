@@ -134,6 +134,22 @@ def test_real_ais_depository_descriptions_match_broker_short_names():
     assert all("(" not in p.name and "EQ" not in p.name.split() for p in r.matched)
 
 
+def test_merge_aggregates_pools_several_broker_files_per_security():
+    # the same security split across two broker files is pooled into one total
+    a = agg(_rows(("Reliance Industries Ltd", "INE002A01018", "30000"),
+                  ("Infosys Ltd", "INE009A01021", "8000")))
+    b = agg(_rows(("Reliance Industries Ltd", "INE002A01018", "20000"),
+                  ("Tata Steel Ltd", "INE081A01020", "6000")))
+    merged = reco.merge_aggregates([a, b])
+    assert merged["INE002A01018"].value == 50000 and merged["INE002A01018"].n == 2
+    assert merged["INE009A01021"].value == 8000 and merged["INE009A01021"].n == 1
+    assert set(merged) == {"INE002A01018", "INE009A01021", "INE081A01020"}
+    # pooled CG side reconciles against a single AIS line for the security
+    ais = agg(_rows(("RELIANCE INDUSTRIES LIMITED EQ(INE002A01018)", "INE002A01018", "50000")))
+    r = reco.reconcile({"INE002A01018": merged["INE002A01018"]}, ais)
+    assert r.counts()["matched"] == 1
+
+
 def test_ais_name_only_side_still_matches_by_normalised_issuer():
     # Defensive: if an AIS export drops the ISIN, the issuer-name normalisation
     # (which cuts the "EQ …"/"EQUITY SHARES …" tail) still lands the match.

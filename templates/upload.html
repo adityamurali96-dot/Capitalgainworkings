@@ -1,12 +1,15 @@
 {% extends "base.html" %}{% block step %}1 · upload{% endblock %}
 {% block body %}
 <p class="note"><a href="{{url_for('home')}}">← main menu</a></p>
-<h2>Upload a capital-gains statement</h2>
-<p class="sub">One source file at a time — xlsx, xls, or csv. You map the columns next.</p>
+<h2>Upload capital-gains statement(s)</h2>
+<p class="sub">One or more source files — xlsx, xls, or csv, up to {{max_files}} at once.
+Add every broker / AMC statement for the client; each file is mapped and declared on
+its own terms next, then all of them are consolidated into a single computation.</p>
 <div class="card">
   <form action="{{url_for('upload')}}" method="post" enctype="multipart/form-data">
-    <p><input type="file" name="file" accept=".xlsx,.xls,.csv,.tsv" required></p>
-    <p><button class="btn" type="submit">Read file →</button></p>
+    <p><input type="file" name="files" accept=".xlsx,.xls,.csv,.tsv" multiple required></p>
+    <p class="note">Hold ⌘ / Ctrl (or Shift) to pick several files in the dialog.</p>
+    <p><button class="btn" type="submit">Read file(s) →</button></p>
   </form>
   <p class="note">ISIN classification DB: {{db_status}}</p>
 </div>
