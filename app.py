@@ -1,8 +1,13 @@
 """
 app.py — the cg-engine hub (Flask).
 
-Flow:  upload -> pick header row -> map columns + declare -> classify (3-state
-gate, 50AA confirm) -> compute -> download Output A + Output B.
+Flow:  upload (one OR many files) -> pick header rows -> map columns + declare
+(per file) -> classify (3-state gate, 50AA confirm, STT auto-derived) -> compute
+-> download Output A..D.
+
+Multiple source files (up to MAX_FILES) are consolidated in one run: each file is
+detected, mapped and declared on its OWN terms (broker formats differ), then every
+file's clean lot rows are merged into one dataset for a single classify + compute.
 
 State lives in an in-memory JOBS dict keyed by a job id (a cookie). Single-user,
 local tool — no DB, no auth. The preparer is responsible for the figures; the
@@ -28,6 +33,8 @@ JOBS: dict[str, dict] = {}
 OUT_DIR = os.environ.get("CG_OUT", os.path.join(os.path.expanduser("~"), "Downloads", "cg-engine-out"))
 os.makedirs(OUT_DIR, exist_ok=True)
 
+MAX_FILES = 10          # upload cap, per the multi-source consolidation feature
+
 
 def job():
     jid = session.get("jid")
@@ -50,10 +57,10 @@ def _read_any(file_storage, header_row=None):
     return xls
 
 
-def _suggest_forward_fill(j: dict, automap: dict) -> bool:
+def _suggest_forward_fill(rows_below: list, automap: dict) -> bool:
     """Propose carrying name/ISIN down when they are far sparser than the sale
     columns — the signature of a grouped layout (e.g. IIFL lists the scrip once)."""
-    rows = j.get("rows_below", [])
+    rows = rows_below
     if not rows:
         return False
     def fill_rate(field):
@@ -67,27 +74,24 @@ def _suggest_forward_fill(j: dict, automap: dict) -> bool:
     return bool(name_r is not None and date_r and name_r < 0.6 * date_r)
 
 
-def _suggest_isin_split(j: dict, automap: dict) -> bool:
+def _suggest_isin_split(headers: list, rows_below: list, automap: dict) -> bool:
     """Propose auto-splitting a merged "name + ISIN" security column when a large
     share of name cells carry an embedded ISIN and no separate ISIN column is
     already populated (the common broker layout)."""
-    headers = j.get("headers", [])
-    rows = j.get("rows_below", [])
     name_h = automap.get("security_name", {}).get("header")
     isin_h = automap.get("isin", {}).get("header")
-    if not name_h or not rows:
+    if not name_h or not rows_below:
         return False
-    dict_rows = [dict(zip(headers, r)) for r in rows[:200]]
+    dict_rows = [dict(zip(headers, r)) for r in rows_below[:200]]
     return detect.name_isin_merge_rate(dict_rows, name_h, isin_h) >= 0.4
 
 
-def _finalise_rows(j: dict, m: dict, forward_fill: bool) -> list[dict]:
-    """Build the clean per-lot rows the engine will consume: dict-ify, optionally
-    forward-fill grouped name/ISIN, then drop section-divider, total/footnote and
-    repeated-header rows. The skipped count is stashed for the next screen."""
-    headers = j["headers"]
-    raw_rows = j.get("rows_below", [])
-    raw_sheets = j.get("row_sheets", [None] * len(raw_rows))
+def _finalise_rows(headers: list, raw_rows: list, raw_sheets: list, m: dict,
+                   forward_fill: bool):
+    """Build the clean per-lot rows the engine will consume for ONE file: dict-ify,
+    optionally forward-fill grouped name/ISIN, then drop section-divider,
+    total/footnote and repeated-header rows. Returns (kept_rows, kept_sheets,
+    skipped_count)."""
     rows = [dict(zip(headers, r)) for r in raw_rows]
     if forward_fill:
         ff_cols = [m[f] for f in ("security_name", "isin") if m.get(f)]
@@ -108,9 +112,41 @@ def _finalise_rows(j: dict, m: dict, forward_fill: bool) -> list[dict]:
         if not has_sale:
             skipped += 1; continue
         kept.append(r); kept_sheets.append(sn)
+    return kept, kept_sheets, skipped
+
+
+def _build_unified_data(j: dict):
+    """Concatenate every selected file's finalised lot rows into one dataset for
+    classify/compute. Each row remembers its source file index (so that file's own
+    column mapping and per-source declarations are applied downstream) and a display
+    group label (file / file·sheet) so the classify screen can group the line items."""
+    files = j["files"]
+    sel = [(fi, f) for fi, f in enumerate(files) if f.get("headers") and f.get("mapping")]
+    data, data_file, data_groups = [], [], []
+    maps, decls, labels, skipped = {}, {}, {}, 0
+    for fi, fdict in sel:
+        m, decl = fdict["mapping"], fdict["decl"]
+        ff = fdict.get("forward_fill", False)
+        raw_sheets = fdict.get("row_sheets") or [None] * len(fdict["rows_below"])
+        kept, kept_sheets, sk = _finalise_rows(fdict["headers"], fdict["rows_below"],
+                                               raw_sheets, m, ff)
+        skipped += sk
+        maps[fi] = m
+        decls[fi] = decl
+        label = decl.get("source_label") or fdict["filename"]
+        labels[fi] = label
+        multi_sheet_in_file = len(fdict.get("selected_sheets", [])) > 1
+        for r, sn in zip(kept, kept_sheets):
+            data.append(r)
+            data_file.append(fi)
+            data_groups.append(f"{label} · {sn}" if (multi_sheet_in_file and sn) else label)
+    j["data"] = data
+    j["data_file"] = data_file
+    j["data_groups"] = data_groups
+    j["maps"] = maps
+    j["decls"] = decls
+    j["file_labels"] = labels
     j["skipped"] = skipped
-    j["data_sheets"] = kept_sheets    # sheet of origin per kept row (multi-sheet runs)
-    return kept
 
 
 def _dedupe_headers(cells):
@@ -131,7 +167,7 @@ def _extract_records(file_storage):
     auto-map columns, and return (clean dict rows, automap, info). Reuses the
     same detection + blank/divider handling as the CG flow, plus a forward-fill
     for grouped layouts. The auto-map is a starting point — the AIS file's
-    columns are shown for confirmation/override on the /ais/map screen; the
+    columns are shown for confirmation/override on the /ais/map screen; each
     broker/CG file is consumed automatically. `info["headers"]` carries the
     detected header names so the confirm screen can render a column preview."""
     sheets = _read_any(file_storage, header_row=None)
@@ -189,151 +225,186 @@ def home():
 def cg_home():
     """Entry to the Capital Gain Summary flow (upload -> pick -> map -> compute)."""
     session.pop("jid", None)
-    return render_template("upload.html", db_status=isin_db.db_status())
+    return render_template("upload.html", db_status=isin_db.db_status(), max_files=MAX_FILES)
 
 
 @app.route("/upload", methods=["POST"])
 def upload():
     j = job()
-    f = request.files.get("file")
-    if not f or not f.filename:
-        flash("Choose a file."); return redirect(url_for("home"))
-    try:
-        sheets = _read_any(f, header_row=None)  # raw, no header yet
-    except Exception as e:
-        flash(f"Could not read file: {e}"); return redirect(url_for("home"))
-    # drop all-blank columns (the .xls merged-cell spillover) so every later
-    # step — preview, header detect, mapping — sees only real columns.
-    cleaned = {}
-    for k, v in sheets.items():
-        rows = v.fillna("").astype(str).values.tolist()
-        rows, _ = detect.drop_blank_columns(rows)
-        cleaned[k] = rows
-    j["sheets"] = cleaned
-    j["filename"] = f.filename
-    # auto-detect: which sheet is the data, which row is the header, column wiring
-    j["ranked"] = detect.rank_sheets(cleaned)
+    files = [f for f in request.files.getlist("files") if f and f.filename]
+    if not files:
+        flash("Choose at least one file."); return redirect(url_for("cg_home"))
+    if len(files) > MAX_FILES:
+        flash(f"Up to {MAX_FILES} files at a time — using the first {MAX_FILES}.")
+        files = files[:MAX_FILES]
+    jfiles = []
+    for f in files:
+        try:
+            sheets = _read_any(f, header_row=None)  # raw, no header yet
+        except Exception as e:
+            flash(f"Could not read {f.filename}: {e}"); return redirect(url_for("cg_home"))
+        # drop all-blank columns (the .xls merged-cell spillover) so every later
+        # step — preview, header detect, mapping — sees only real columns.
+        cleaned = {}
+        for k, v in sheets.items():
+            rows = v.fillna("").astype(str).values.tolist()
+            rows, _ = detect.drop_blank_columns(rows)
+            cleaned[k] = rows
+        jfiles.append({"filename": f.filename, "sheets": cleaned,
+                       "ranked": detect.rank_sheets(cleaned)})
+    # fresh run: drop anything remembered from a previous one
+    for k in ("data", "data_file", "data_groups", "maps", "decls", "file_labels",
+              "resolved", "cls_choices", "out_base"):
+        j.pop(k, None)
+    j["files"] = jfiles
     return redirect(url_for("pick"))
 
 
 @app.route("/pick", methods=["GET", "POST"])
 def pick():
     j = job()
-    if "sheets" not in j:
+    files = j.get("files")
+    if not files:
         return redirect(url_for("home"))
-    sheet_names = list(j["sheets"].keys())
-    ranked = {r["name"]: r for r in j.get("ranked", [])}
-    order = [r["name"] for r in j.get("ranked", [])]  # best-data-first
 
     if request.method == "POST":
-        selected = request.form.getlist("sheets")
-        if not selected:
-            flash("Tick at least one sheet."); return redirect(url_for("pick"))
-        # per-sheet header row (defaults to the detected one)
-        hdr_of = {}
-        for sn in selected:
-            raw = request.form.get(f"header_row_{sn}")
-            det = ranked.get(sn, {}).get("header_row")
-            hdr_of[sn] = int(raw) if (raw not in (None, "")) else (det if det is not None else 0)
-        # primary = the selected sheet ranked highest (best detected structure);
-        # its header row defines the unified columns the others align onto.
-        primary = min(selected, key=lambda s: order.index(s) if s in order else 999)
-        unified = _dedupe_headers(j["sheets"][primary][hdr_of[primary]])
-        width = len(unified)
-        # combine: every selected sheet's rows, position-aligned to the unified
-        # width (same column order across ST/LT or per-account splits). Different
-        # header text/case across sheets is irrelevant — mapping is on `unified`.
-        per_sheet_rows = {sn: detect.combine_aligned([(j["sheets"][sn], hdr_of[sn])], width)
-                          for sn in selected}
-        combined = [r for sn in selected for r in per_sheet_rows[sn]]
-        # parallel list: which sheet each combined row came from, so the classify
-        # screen can group line items under their sheet (e.g. "Sheet 1 — Short term").
-        row_sheets = [sn for sn in selected for _ in per_sheet_rows[sn]]
-        sheet_counts = {sn: len(rows) for sn, rows in per_sheet_rows.items()}
-        j["headers"] = unified
-        j["rows_below"] = combined
-        j["row_sheets"] = row_sheets
-        j["selected_sheets"] = selected
-        j["sheet_counts"] = sheet_counts
-        j["hdr_of"] = hdr_of          # remembered so "← Back" can restore the picks
+        any_selected = False
+        for fi, fdict in enumerate(files):
+            ranked = {r["name"]: r for r in fdict.get("ranked", [])}
+            order = [r["name"] for r in fdict.get("ranked", [])]
+            selected = request.form.getlist(f"sheets_{fi}")
+            if not selected:
+                # this file contributes no sheets to the run
+                for k in ("headers", "rows_below", "row_sheets"):
+                    fdict.pop(k, None)
+                fdict["selected_sheets"] = []
+                continue
+            any_selected = True
+            # per-sheet header row (defaults to the detected one)
+            hdr_of = {}
+            for sn in selected:
+                raw = request.form.get(f"header_row_{fi}_{sn}")
+                det = ranked.get(sn, {}).get("header_row")
+                hdr_of[sn] = int(raw) if (raw not in (None, "")) else (det if det is not None else 0)
+            # primary = the selected sheet ranked highest; its header row defines the
+            # unified columns the others in THIS file align onto (per-file alignment).
+            primary = min(selected, key=lambda s: order.index(s) if s in order else 999)
+            unified = _dedupe_headers(fdict["sheets"][primary][hdr_of[primary]])
+            width = len(unified)
+            per_sheet_rows = {sn: detect.combine_aligned([(fdict["sheets"][sn], hdr_of[sn])], width)
+                              for sn in selected}
+            combined = [r for sn in selected for r in per_sheet_rows[sn]]
+            row_sheets = [sn for sn in selected for _ in per_sheet_rows[sn]]
+            sheet_counts = {sn: len(rows) for sn, rows in per_sheet_rows.items()}
+            fdict["headers"] = unified
+            fdict["rows_below"] = combined
+            fdict["row_sheets"] = row_sheets
+            fdict["selected_sheets"] = selected
+            fdict["sheet_counts"] = sheet_counts
+            fdict["hdr_of"] = hdr_of          # remembered so "← Back" can restore the picks
+        if not any_selected:
+            flash("Tick at least one sheet across your file(s)."); return redirect(url_for("pick"))
         return redirect(url_for("mapping_step"))
 
-    # GET: preview deep enough to reach each detected header; flag the sheets that
-    # share the recommended sheet's structure so ST/LT splits pre-tick together.
-    rec = j.get("ranked", [{}])[0] if j.get("ranked") else {}
-    rec_reqset = frozenset(f for f in detect.REQUIRED if f in rec.get("automap", {}))
-    # if the preparer is stepping BACK to this screen, restore their earlier picks.
-    prev_selected = set(j.get("selected_sheets") or [])
-    prev_hdr = j.get("hdr_of") or {}
-    autocheck, sheet_hdr = {}, {}
-    for idx, r in enumerate(j.get("ranked", [])):
-        rset = frozenset(f for f in detect.REQUIRED if f in r.get("automap", {}))
-        sheet_hdr[r["name"]] = prev_hdr.get(r["name"], r["header_row"])
-        if prev_selected:
-            autocheck[r["name"]] = r["name"] in prev_selected
-        else:
-            autocheck[r["name"]] = (
-                (idx == 0 and r["header_row"] is not None) or
-                (r["header_row"] is not None and len(rset) >= 4 and rset == rec_reqset
-                 and len(rec_reqset) >= 4)
-            )
-    deepest = max([h for h in sheet_hdr.values() if h is not None] + [0])
-    plen = min(40, max(15, deepest + 4))
-    preview = {sn: j["sheets"][sn][:plen] for sn in sheet_names}
-    return render_template("pick.html", sheets=sheet_names, preview=preview,
-                           filename=j.get("filename", ""), ranked=ranked,
-                           recommend=rec.get("name"), autocheck=autocheck,
-                           sheet_hdr=sheet_hdr)
+    # GET: build a preview block per file
+    file_blocks = []
+    for fi, fdict in enumerate(files):
+        ranked = {r["name"]: r for r in fdict.get("ranked", [])}
+        rec = fdict.get("ranked", [{}])[0] if fdict.get("ranked") else {}
+        rec_reqset = frozenset(f for f in detect.REQUIRED if f in rec.get("automap", {}))
+        prev_selected = set(fdict.get("selected_sheets") or [])
+        prev_hdr = fdict.get("hdr_of") or {}
+        autocheck, sheet_hdr = {}, {}
+        for idx, r in enumerate(fdict.get("ranked", [])):
+            rset = frozenset(f for f in detect.REQUIRED if f in r.get("automap", {}))
+            sheet_hdr[r["name"]] = prev_hdr.get(r["name"], r["header_row"])
+            if prev_selected:
+                autocheck[r["name"]] = r["name"] in prev_selected
+            else:
+                autocheck[r["name"]] = (
+                    (idx == 0 and r["header_row"] is not None) or
+                    (r["header_row"] is not None and len(rset) >= 4 and rset == rec_reqset
+                     and len(rec_reqset) >= 4)
+                )
+        deepest = max([h for h in sheet_hdr.values() if h is not None] + [0])
+        plen = min(40, max(15, deepest + 4))
+        sheet_names = list(fdict["sheets"].keys())
+        preview = {sn: fdict["sheets"][sn][:plen] for sn in sheet_names}
+        file_blocks.append({
+            "fi": fi, "filename": fdict["filename"], "sheets": sheet_names,
+            "preview": preview, "ranked": ranked, "recommend": rec.get("name"),
+            "autocheck": autocheck, "sheet_hdr": sheet_hdr,
+        })
+    return render_template("pick.html", file_blocks=file_blocks, multi=len(files) > 1)
 
 
 @app.route("/map", methods=["GET", "POST"])
 def mapping_step():
     j = job()
-    if "headers" not in j:
+    files = j.get("files") or []
+    sel = [(fi, f) for fi, f in enumerate(files) if f.get("headers")]
+    if not sel:
         return redirect(url_for("home"))
+
     if request.method == "POST":
-        m = {fld: request.form.get(f"map_{fld}") or None for fld in mapping.CANONICAL_FIELDS}
-        decl = {
-            "source_label": request.form.get("source_label") or "Source",
-            "cost_basis_meaning": request.form.get("cost_basis_meaning", "raw"),
-            "default_asset_type": request.form.get("default_asset_type") or None,
-            "default_stt_paid": request.form.get("default_stt_paid") == "yes",
-            "default_is_50aa": request.form.get("default_is_50aa") == "yes",
-            "fmv_basis": request.form.get("fmv_basis", "per_unit"),
-            "grandfathering_basis": request.form.get("grandfathering_basis", "by_date"),
-        }
-        forward_fill = request.form.get("forward_fill") == "yes"
-        j["mapping"] = m; j["decl"] = decl; j["forward_fill"] = forward_fill
-        j["data"] = _finalise_rows(j, m, forward_fill)
+        for fi, fdict in sel:
+            m = {fld: request.form.get(f"map_{fi}_{fld}") or None for fld in mapping.CANONICAL_FIELDS}
+            decl = {
+                "source_label": request.form.get(f"source_label_{fi}") or fdict["filename"],
+                "cost_basis_meaning": request.form.get(f"cost_basis_meaning_{fi}", "raw"),
+                "default_asset_type": request.form.get(f"default_asset_type_{fi}") or None,
+                "stt_basis": request.form.get(f"stt_basis_{fi}", "auto"),
+                "default_is_50aa": request.form.get(f"default_is_50aa_{fi}") == "yes",
+                "fmv_basis": request.form.get(f"fmv_basis_{fi}", "per_unit"),
+                "grandfathering_basis": request.form.get(f"grandfathering_basis_{fi}", "by_date"),
+                "ay": "2025-26",
+            }
+            fdict["mapping"] = m
+            fdict["decl"] = decl
+            fdict["forward_fill"] = request.form.get(f"forward_fill_{fi}") == "yes"
         # a fresh mapping invalidates any classify choices remembered for back-nav
         j.pop("cls_choices", None)
+        _build_unified_data(j)
         return redirect(url_for("classify_step"))
-    automap = detect.auto_map(j["headers"])
-    counts = j.get("sheet_counts", {})
-    combined = [(sn, counts.get(sn, 0)) for sn in j.get("selected_sheets", [])]
-    saved_map = j.get("mapping")          # present when stepping BACK to this screen
-    ff_default = j.get("forward_fill") if "forward_fill" in j else _suggest_forward_fill(j, automap)
-    return render_template("map.html", headers=j["headers"],
+
+    # GET: one mapping/declare panel per selected file
+    panels = []
+    for fi, fdict in sel:
+        headers = fdict["headers"]
+        automap = detect.auto_map(headers)
+        rows_below = fdict.get("rows_below", [])
+        counts = fdict.get("sheet_counts", {})
+        combined = [(sn, counts.get(sn, 0)) for sn in fdict.get("selected_sheets", [])]
+        ff_default = fdict.get("forward_fill") if "forward_fill" in fdict \
+            else _suggest_forward_fill(rows_below, automap)
+        panels.append({
+            "fi": fi, "filename": fdict["filename"], "headers": headers,
+            "automap": automap, "ff_suggest": ff_default,
+            "saved_map": fdict.get("mapping"),
+            "decl": fdict.get("decl") or {"source_label": fdict["filename"]},
+            "isin_merged": _suggest_isin_split(headers, rows_below, automap),
+            "combined": combined,
+        })
+    return render_template("map.html", panels=panels, multi=len(sel) > 1,
                            fields=mapping.CANONICAL_FIELDS, required=mapping.REQUIRED,
                            labels=mapping.FIELD_LABELS,
-                           asset_types=sorted(compute.ASSET_TYPES),
-                           automap=automap, ff_suggest=ff_default,
-                           saved_map=saved_map, decl=j.get("decl") or {},
-                           isin_merged=_suggest_isin_split(j, automap),
-                           combined=combined)
+                           asset_types=sorted(compute.ASSET_TYPES))
 
 
 @app.route("/classify", methods=["GET", "POST"])
 def classify_step():
     j = job()
-    if "mapping" not in j:
+    if "data" not in j:
         return redirect(url_for("home"))
-    m, decl, data = j["mapping"], j["decl"], j["data"]
+    data, data_file = j["data"], j["data_file"]
+    maps, decls = j["maps"], j["decls"]
 
     if request.method == "POST":
         # collect per-row resolutions (and remember the raw choices for "← Back")
         resolved, choices = [], []
         for i, row in enumerate(data):
+            fi = data_file[i]
+            m, decl = maps[fi], decls[fi]
             sel_asset = request.form.get(f"asset_{i}") or ""
             at = sel_asset or decl.get("default_asset_type")
             is50 = request.form.get(f"f50_{i}") == "yes"
@@ -349,13 +420,15 @@ def classify_step():
         return redirect(url_for("result"))
 
     # GET: pre-fill via DB, build the review table
-    gf_basis = decl.get("grandfathering_basis", "by_date")
-    fmv_col = m.get("fmv_31jan2018")
-    data_sheets = j.get("data_sheets", [])
-    multi_sheet = len(j.get("selected_sheets", [])) > 1
+    data_groups = j.get("data_groups", [])
+    multi_group = len(set(data_groups)) > 1
     cls_choices = j.get("cls_choices") or []     # present when stepping BACK to this screen
     rows, gf_warn_n = [], 0
     for i, row in enumerate(data):
+        fi = data_file[i]
+        m, decl = maps[fi], decls[fi]
+        gf_basis = decl.get("grandfathering_basis", "by_date")
+        fmv_col = m.get("fmv_31jan2018")
         # peek name/isin using the mapping, auto-splitting a merged "name + ISIN" cell
         name, isin = mapping.split_name_isin(row.get(m.get("security_name") or ""),
                                              row.get(m.get("isin") or "") if m.get("isin") else "")
@@ -370,7 +443,9 @@ def classify_step():
         # pre-fill 50AA proposal for debt rows from acquisition date
         acq = mapping.parse_date(row.get(m.get("acquisition_date") or ""))
         prop50 = bool(debt and acq and acq.toordinal() >= mapping.parse_date("2023-04-01").toordinal())
-        stt_default = decl.get("default_stt_paid", at in ("equity", "eof", "business_trust"))
+        # STT auto-derived from the asset class (listed equity/EOF/business trust ->
+        # Yes; unlisted/foreign/debt/VDA -> No), unless the source forces it.
+        stt_default = compute.resolve_stt(decl.get("stt_basis", "auto"), at)
         if choice is not None:
             prop50 = choice.get("f50", prop50)
             stt_default = choice.get("stt", stt_default)
@@ -389,7 +464,7 @@ def classify_step():
             "basis": look["basis"] or decl.get("cost_basis_meaning", ""),
             "reason": look["reason"], "is_debt": debt,
             "prop50": prop50, "stt": stt_default,
-            "sheet": data_sheets[i] if i < len(data_sheets) else None,
+            "sheet": data_groups[i] if i < len(data_groups) else None,
             "gf_note": gf_note, "gf_warn": gf_warn,
         })
     if gf_warn_n:
@@ -399,8 +474,9 @@ def classify_step():
     j["prefill"] = rows
     return render_template("classify.html", rows=rows,
                            asset_types=sorted(compute.ASSET_TYPES),
-                           decl=decl, skipped=j.get("skipped", 0),
-                           multi_sheet=multi_sheet)
+                           decl=(decls[data_file[0]] if data_file else {}),
+                           skipped=j.get("skipped", 0),
+                           multi_sheet=multi_group)
 
 
 @app.route("/result")
@@ -413,18 +489,27 @@ def result():
     if not txns:
         return render_template("result.html", errors=errors, ok=False,
                                results=[], counts={}, summary_file=None, winman_file=None)
-    results = compute.compute_all(txns, ay=j["decl"].get("ay", "2025-26"))
-    client = j["decl"].get("source_label", "Client")
+    ay = "2025-26"
+    results = compute.compute_all(txns, ay=ay)
+    labels = list(j.get("file_labels", {}).values())
+    client = labels[0] if labels else "Client"
+    if len(labels) > 1:
+        client = f"{labels[0]} +{len(labels) - 1} more"
     base = "".join(c for c in client if c.isalnum() or c in " _-").strip() or "client"
+    j["out_base"] = base
     sfile = os.path.join(OUT_DIR, f"{base}_CG_Summary.xlsx")
     wfile = os.path.join(OUT_DIR, f"{base}_Winman.xlsx")
     vfile = os.path.join(OUT_DIR, f"{base}_Validation.xlsx")
     afile = os.path.join(OUT_DIR, f"{base}_AIS_Input.xlsx")
-    # validation: compare the engine against the broker's own already-stated figures
+    # validation: compare the engine against the broker's own already-stated figures,
+    # scanning the printed totals across EVERY uploaded file's sheets.
+    all_sheets = {}
+    for fdict in j.get("files", []):
+        for sn, srows in fdict.get("sheets", {}).items():
+            all_sheets[f"{fdict['filename']}::{sn}"] = srows
     vres = validate.build_validation(results)
-    vres.printed = validate.scan_broker_totals(j.get("sheets", {}))
-    write_summary(results, sfile, client=client, ay=j["decl"].get("ay", "2025-26"),
-                  validation=vres)
+    vres.printed = validate.scan_broker_totals(all_sheets)
+    write_summary(results, sfile, client=client, ay=ay, validation=vres)
     _, counts = write_winman(results, wfile)
     write_validation(vres, vfile, client=client)
     # Output D: the clean, ISIN-keyed sale side, ready to feed into AIS Reconciliation.
@@ -443,8 +528,7 @@ def result():
 @app.route("/download/<which>")
 def download(which):
     j = job()
-    client = j.get("decl", {}).get("source_label", "client")
-    base = "".join(c for c in client if c.isalnum() or c in " _-").strip() or "client"
+    base = j.get("out_base") or "client"
     names = {"summary": f"{base}_CG_Summary.xlsx", "winman": f"{base}_Winman.xlsx",
              "validation": f"{base}_Validation.xlsx", "ais_input": f"{base}_AIS_Input.xlsx"}
     fn = names.get(which, names["summary"])
@@ -460,26 +544,33 @@ def download(which):
 def ais():
     if request.method == "GET":
         session.pop("jid", None)
-        return render_template("ais_upload.html")
+        return render_template("ais_upload.html", max_files=MAX_FILES)
     j = job()
-    cg_f = request.files.get("cg_file")
+    cg_fs = [f for f in request.files.getlist("cg_files") if f and f.filename]
     ais_f = request.files.get("ais_file")
-    if not cg_f or not cg_f.filename or not ais_f or not ais_f.filename:
-        flash("Upload both files — the capital-gains/broker file and the AIS file.")
+    if not cg_fs or not ais_f or not ais_f.filename:
+        flash("Upload at least one capital-gains/broker file and the AIS file.")
         return redirect(url_for("ais"))
+    if len(cg_fs) > MAX_FILES:
+        flash(f"Up to {MAX_FILES} broker/CG files at a time — using the first {MAX_FILES}.")
+        cg_fs = cg_fs[:MAX_FILES]
     try:
-        cg_rows, cg_map, cg_info = _extract_records(cg_f)
+        cg_parts, cg_infos, problems = [], [], []
+        for f in cg_fs:
+            rows, mp, info = _extract_records(f)
+            # each broker/CG file is consumed automatically — it must yield a
+            # sale-value column and at least one key (ISIN/name) on its own.
+            if "sale_consideration" not in mp:
+                problems.append(f"{f.filename}: no sale-value column found"); continue
+            if "isin" not in mp and "security_name" not in mp:
+                problems.append(f"{f.filename}: no ISIN or security-name column found"); continue
+            cg_parts.append(reco.aggregate(rows, *_reco_cols(mp)))
+            cg_infos.append({"filename": f.filename, "sheet": info.get("sheet"),
+                             "n": info.get("n", len(rows))})
         ais_rows, ais_map, ais_info = _extract_records(ais_f)
     except Exception as e:
         flash(f"Could not read a file: {e}"); return redirect(url_for("ais"))
 
-    # the broker/CG file is consumed automatically — it must yield a sale-value
-    # column and at least one key (ISIN/name) on its own.
-    problems = []
-    if "sale_consideration" not in cg_map:
-        problems.append("no sale-value column found in the capital-gains/broker file")
-    if "isin" not in cg_map and "security_name" not in cg_map:
-        problems.append("no ISIN or security-name column found in the capital-gains/broker file")
     if not ais_info.get("headers"):
         problems.append("could not locate the AIS data header automatically — check the file")
     if problems:
@@ -487,14 +578,21 @@ def ais():
             flash(p)
         return redirect(url_for("ais"))
 
-    # aggregate the CG side now; the AIS side waits for the confirm screen so the
-    # preparer can see and override its column wiring before the match.
-    cg_agg = reco.aggregate(cg_rows, *_reco_cols(cg_map))
+    # merge every broker/CG file's per-security aggregate into one; the AIS side
+    # waits for the confirm screen so the preparer can see/override its wiring.
+    cg_agg = reco.merge_aggregates(cg_parts)
+    cg_total_rows = sum(ci["n"] for ci in cg_infos)
+    if len(cg_fs) == 1:
+        cg_label = os.path.splitext(cg_fs[0].filename)[0][:24]
+        cg_sheet = cg_infos[0]["sheet"] if cg_infos else None
+    else:
+        cg_label = f"{os.path.splitext(cg_fs[0].filename)[0][:16]} +{len(cg_fs) - 1} more"
+        cg_sheet = "(multiple files)"
     j["reco"] = {
         "cg_agg": cg_agg,
-        "cg_label": os.path.splitext(cg_f.filename)[0][:24],
+        "cg_label": cg_label,
         "ais_label": os.path.splitext(ais_f.filename)[0][:24],
-        "cg_info": cg_info,
+        "cg_info": {"sheet": cg_sheet, "n": cg_total_rows, "files": cg_infos},
         "ais_rows": ais_rows,
         "ais_headers": ais_info.get("headers", []),
         "ais_info": ais_info,

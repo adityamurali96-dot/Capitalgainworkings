@@ -1,21 +1,31 @@
 {% extends "base.html" %}{% block step %}3 · map & declare{% endblock %}
 {% block body %}
 <p class="note"><a href="{{url_for('pick')}}">← back to sheets &amp; headers</a></p>
-<h2>Map columns &amp; declare the source</h2>
-{% if combined and combined|length > 1 %}
-<p class="note">Combining {{combined|length}} sheets into one run:
-{% for sn, n in combined %}<b>{{sn}}</b> ({{n}} rows){% if not loop.last %} + {% endif %}{% endfor %}.
-Map the columns once below — it applies to all of them.</p>
-{% endif %}
-{% set matched = automap|length %}
-<p class="sub">We auto-matched <b>{{matched}}</b> of {{fields|length}} columns from the
-header names. <span class="req">*</span> = required. Review the pre-filled picks
-(green = confident, amber = low-confidence guess), fix any that are wrong, then
-declare the facts the engine must not guess.</p>
+<h2>Map columns &amp; declare {% if multi %}each source{% else %}the source{% endif %}</h2>
+<p class="sub">{% if multi %}One panel per file — map each on its own terms (broker formats
+differ), then they're consolidated into a single computation.{% endif %}
+Review the pre-filled picks (green = confident, amber = low-confidence guess), fix any
+that are wrong, then declare the facts the engine must not guess.
+<span class="req">*</span> = required.</p>
 <form action="{{url_for('mapping_step')}}" method="post">
 
+{% for p in panels %}
+{% set fi = p.fi %}
+{% set automap = p.automap %}
+{% set saved_map = p.saved_map %}
+{% set decl = p.decl %}
+{% if multi %}
+<h3 style="margin:20px 0 8px;border-bottom:2px solid var(--accent);padding-bottom:4px">
+  File {{loop.index}}: <span class="mono">{{p.filename}}</span></h3>
+{% endif %}
+{% if p.combined and p.combined|length > 1 %}
+<p class="note">Combining {{p.combined|length}} sheets:
+{% for sn, n in p.combined %}<b>{{sn}}</b> ({{n}} rows){% if not loop.last %} + {% endif %}{% endfor %}.
+Map the columns once below — it applies to all of them.</p>
+{% endif %}
+
 <div class="card">
-  <h3 style="margin-top:0">Column mapping</h3>
+  <h3 style="margin-top:0">Column mapping{% if not multi %} — {{p.filename}}{% endif %}</h3>
   <div class="grid">
   {% for f in fields %}
     {% set guess = automap.get(f) %}
@@ -24,15 +34,15 @@ declare the facts the engine must not guess.</p>
       {% if guess and guess.confidence=='high' %}<span class="pill trusted">auto</span>
       {% elif guess %}<span class="pill proposed">check</span>
       {% elif f in required %}<span class="pill manual">set it</span>{% endif %}</b>
-      <select name="map_{{f}}">
+      <select name="map_{{fi}}_{{f}}">
         <option value="">— not present —</option>
-        {% for h in headers %}<option value="{{h}}" {% if chosen==h %}selected{% endif %}>{{h}}</option>{% endfor %}
+        {% for h in p.headers %}<option value="{{h}}" {% if chosen==h %}selected{% endif %}>{{h}}</option>{% endfor %}
       </select>
     </label>
   {% endfor %}
   </div>
   <p class="note">ISIN is also auto-parsed from the security name if embedded (e.g. <i>ICICI Bank Ltd-INE090A01021</i>).</p>
-  {% if isin_merged %}
+  {% if p.isin_merged %}
   <p class="note" style="color:var(--accent)"><b>Auto-detected:</b> the ISIN looks merged into the
   security-name column. It will be split out for every row — the ISIN is extracted (and used for the
   trusted lookup) and the name is cleaned. Map a separate ISIN column above only if you have one.</p>
@@ -41,10 +51,10 @@ declare the facts the engine must not guess.</p>
   treated as deductible — acquisition expenses are added to cost, sale expenses are deducted from the
   sale consideration. Leave them blank to ignore.</p>
   <label class="fld" style="margin-top:8px">
-    <input type="checkbox" name="forward_fill" value="yes" style="width:auto" {% if ff_suggest %}checked{% endif %}>
+    <input type="checkbox" name="forward_fill_{{fi}}" value="yes" style="width:auto" {% if p.ff_suggest %}checked{% endif %}>
     <b style="display:inline">Carry security name / ISIN down onto the rows below</b>
     <span class="note">— for grouped layouts that print the scrip once and leave the
-    lot rows beneath it blank (e.g. IIFL).{% if ff_suggest %} <b>Suggested for this file.</b>{% endif %}</span>
+    lot rows beneath it blank (e.g. IIFL).{% if p.ff_suggest %} <b>Suggested for this file.</b>{% endif %}</span>
   </label>
 </div>
 
@@ -54,35 +64,41 @@ declare the facts the engine must not guess.</p>
   {% set d_at = decl.get('default_asset_type', '') %}
   {% set d_fmv = decl.get('fmv_basis', 'per_unit') %}
   {% set d_gf = decl.get('grandfathering_basis', 'by_date') %}
+  {% set d_stt = decl.get('stt_basis', 'auto') %}
   <div class="grid">
     <label class="fld"><b>Source / client label</b>
-      <input type="text" name="source_label" placeholder="e.g. Zerodha — Deepak" value="{{ decl.get('source_label', 'Source') }}"></label>
+      <input type="text" name="source_label_{{fi}}" placeholder="e.g. Zerodha — Deepak" value="{{ decl.get('source_label', p.filename) }}"></label>
     <label class="fld"><b>Cost basis meaning <span class="req">*</span> — the highest-risk call</b>
-      <select name="cost_basis_meaning">
+      <select name="cost_basis_meaning_{{fi}}">
         <option value="raw" {% if d_cbm=='raw' %}selected{% endif %}>RAW historical cost (engine applies grandfathering) — Zerodha/Groww/ICICI/Kotak/PMS</option>
         <option value="grandfathered" {% if d_cbm=='grandfathered' %}selected{% endif %}>ALREADY grandfathered (engine must NOT re-apply FMV) — CAMS/KFIN, MProfit/Tallis w/ FMV</option>
       </select></label>
     <label class="fld"><b>Default asset type (if file is homogeneous)</b>
-      <select name="default_asset_type">
+      <select name="default_asset_type_{{fi}}">
         <option value="" {% if not d_at %}selected{% endif %}>— classify per row —</option>
         {% for a in asset_types %}<option value="{{a}}" {% if d_at==a %}selected{% endif %}>{{a}}</option>{% endfor %}
       </select></label>
     <label class="fld"><b>FMV column basis</b>
-      <select name="fmv_basis">
+      <select name="fmv_basis_{{fi}}">
         <option value="per_unit" {% if d_fmv=='per_unit' %}selected{% endif %}>per unit (Winman convention)</option>
         <option value="total" {% if d_fmv=='total' %}selected{% endif %}>total value</option>
       </select></label>
     <label class="fld"><b>Grandfathering basis</b>
-      <select name="grandfathering_basis">
+      <select name="grandfathering_basis_{{fi}}">
         <option value="by_date" {% if d_gf=='by_date' %}selected{% endif %}>By acquisition date — FMV substituted only for lots acquired before 01-Feb-2018 (acquisition date required)</option>
         <option value="fmv" {% if d_gf=='fmv' %}selected{% endif %}>FMV-based — when a lot has no acquisition date, use the 31-Jan-2018 FMV (pre-2018, long-term); if there is no FMV either, it is treated as SHORT TERM (warned)</option>
       </select></label>
-    <label class="fld"><b>STT paid on sale (default)</b>
-      <select name="default_stt_paid"><option value="yes" {% if decl.get('default_stt_paid') %}selected{% endif %}>Yes</option><option value="no" {% if not decl.get('default_stt_paid') %}selected{% endif %}>No</option></select></label>
+    <label class="fld"><b>STT on sale</b>
+      <select name="stt_basis_{{fi}}">
+        <option value="auto" {% if d_stt=='auto' %}selected{% endif %}>Auto by asset class — listed equity / EOF / business trust suffer STT; unlisted, foreign, debt &amp; VDA do not</option>
+        <option value="yes" {% if d_stt=='yes' %}selected{% endif %}>Yes — force STT paid for the whole source (on-market)</option>
+        <option value="no" {% if d_stt=='no' %}selected{% endif %}>No — force no STT for the whole source (off-market / unlisted)</option>
+      </select></label>
     <label class="fld"><b>Section 50AA / MLD (default)</b>
-      <select name="default_is_50aa"><option value="no" {% if not decl.get('default_is_50aa') %}selected{% endif %}>No</option><option value="yes" {% if decl.get('default_is_50aa') %}selected{% endif %}>Yes</option></select></label>
+      <select name="default_is_50aa_{{fi}}"><option value="no" {% if not decl.get('default_is_50aa') %}selected{% endif %}>No</option><option value="yes" {% if decl.get('default_is_50aa') %}selected{% endif %}>Yes</option></select></label>
   </div>
 </div>
+{% endfor %}
 
 <button class="btn" type="submit">Classify rows →</button>
 </form>

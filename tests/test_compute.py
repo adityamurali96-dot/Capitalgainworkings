@@ -193,6 +193,35 @@ def test_broker_gain_used_picks_short_or_long_column():
     assert compute_row(_tx()).broker_gain_used() is None
 
 
+def test_stt_default_for_by_asset_class():
+    # listed equity / EOF / business trust suffer STT on sale (exchange-traded);
+    # unlisted, foreign, debt and VDA do not.
+    for a in ("equity", "eof", "business_trust"):
+        assert compute.stt_default_for(a) is True, a
+    for a in ("unlisted", "foreign", "mf_debt", "vda", None):
+        assert compute.stt_default_for(a) is False, a
+
+
+def test_resolve_stt_basis_overrides_and_auto():
+    # auto -> derived from the asset class
+    assert compute.resolve_stt("auto", "equity") is True
+    assert compute.resolve_stt("auto", "unlisted") is False
+    # explicit force wins regardless of asset class
+    assert compute.resolve_stt("yes", "unlisted") is True
+    assert compute.resolve_stt("no", "equity") is False
+    # unknown / missing basis falls back to the auto derivation
+    assert compute.resolve_stt("", "eof") is True
+
+
+def test_auto_stt_routes_listed_equity_to_111a_and_unlisted_outside():
+    # an equity lot with STT (auto) routes through 111A/112A
+    listed = compute_row(_tx(asset_type="equity", stt_paid=compute.stt_default_for("equity")))
+    assert listed.tx.stt_paid is True and listed.section in ("111A", "112A")
+    # an unlisted lot (auto -> no STT) routes to the unlisted block, never 111A/112A
+    unl = compute_row(_tx(asset_type="unlisted", stt_paid=compute.stt_default_for("unlisted")))
+    assert unl.tx.stt_paid is False and unl.section == "unlisted"
+
+
 def test_compute_all_preserves_order_and_count():
     txns = [_tx(security_name="A"), _tx(security_name="B", asset_type="vda")]
     out = compute_all(txns)

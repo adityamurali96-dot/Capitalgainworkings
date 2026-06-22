@@ -2,14 +2,17 @@
 
 Two tools behind one menu (pick one at the start screen):
 
-1. **Capital Gain Summary** — map once → classify → compute deterministically →
-   four writers. One canonical table feeds the firm CG Summary (Output A), the
+1. **Capital Gain Summary** — upload **one or more** statements (up to 10) →
+   map & declare **each source on its own terms** → classify → compute
+   deterministically → four writers. Every file's clean lot rows are consolidated
+   into one canonical table that feeds the firm CG Summary (Output A), the
    Winman import file (Output B), a broker-vs-engine validation sheet
    (Output C) that ties the engine back to the gains the statement already states,
    and a clean, ISIN-keyed sale side (Output D) purpose-built to feed AIS
    Reconciliation.
-2. **AIS Reconciliation** — upload a capital-gains/broker file **and** the AIS
-   statement; columns are auto-detected and sale values are matched per security
+2. **AIS Reconciliation** — upload **one or more** capital-gains/broker files
+   (up to 10) **and** the **single** AIS statement; columns are auto-detected, the
+   broker side is pooled per security across every file, and sale values are matched
    to surface matched / mismatched / only-in-CG / only-in-AIS. Standalone — it
    does not require running the summary first, but feeding it **Output D** from the
    summary gives the cleanest match (the sale side is already ISIN-keyed).
@@ -42,13 +45,15 @@ The Flask templates live in `templates/`; the ISIN classification DB
 
 ## The flow
 
-1. **Upload** one source file (xlsx / xls / csv). On read, all-blank columns (the
-   `.xls` merged-cell spillover) are dropped, then every sheet is scanned to find
-   the lot-level data and its header row.
-2. **Pick** the sheet and the header row — the sheet that looks like lot-level
-   data is **recommended and pre-selected**, with its detected header row
-   highlighted (skips broker client-info junk rows). Override either if wrong.
-3. **Map & declare** — the source columns are **auto-matched** to the canonical
+1. **Upload** one or more source files (xlsx / xls / csv, up to 10). On read,
+   all-blank columns (the `.xls` merged-cell spillover) are dropped, then every
+   sheet of every file is scanned to find the lot-level data and its header row.
+2. **Pick** the sheet(s) and the header row **per file** — the sheet that looks
+   like lot-level data is **recommended and pre-selected**, with its detected
+   header row highlighted (skips broker client-info junk rows). Override either if
+   wrong. Different files may use different layouts; each is mapped separately next.
+3. **Map & declare** — one panel **per file** (broker formats differ, so each is
+   wired and declared on its own). The source columns are **auto-matched** to the canonical
    fields from their header names (green = confident, amber = low-confidence
    guess); review and fix, then declare the per-source facts the engine must not
    guess. Validation-only gain columns (never used to compute, they switch on the
@@ -77,7 +82,16 @@ The Flask templates live in `templates/`; the ISIN classification DB
      pre-2018 grandfathered long-term lot; with no FMV either it is treated as
      **short-term** and the row is **flagged/flashed** so the preparer can map
      the buried acquisition-date column or key it in).
-   - default asset type (if homogeneous), STT default, 50AA default, FMV basis.
+   - default asset type (if homogeneous), 50AA default, FMV basis.
+   - **STT on sale** — `auto` (default), `yes` or `no`. Under **auto** the STT
+     flag is derived **per row from the asset class**: listed equity, equity-oriented
+     MF units and business-trust (REIT/InvIT) units trade on a recognised exchange so
+     their sale suffers STT and routes through 111A/112A; unlisted equity, foreign
+     shares, debt/MF-debt and VDA do not. Because the asset class itself comes from the
+     ISIN/name classification, STT is effectively **ISIN-driven** — "most equity suffers
+     STT unless it is specifically unlisted". Pick `yes`/`no` only to force a whole
+     off-market or on-market source; otherwise the preparer just overrides the rare
+     per-row exception on the classify screen.
    - **forward-fill name/ISIN** — for grouped layouts that print the scrip once
      and leave the lot rows beneath blank (IIFL); auto-suggested when detected.
    Section-divider, sub-total and repeated-header rows are dropped here so they
@@ -176,9 +190,12 @@ the remembered classify choices, since the rows themselves may change.)
 
 ## AIS Reconciliation (the second menu path)
 
-Upload two files — the capital-gains/broker file and the AIS statement. Both are
-auto-detected with the same `detect.py` engine (sheet, header row, columns). The
-broker/CG file is then consumed automatically; for the **AIS file** you get a
+Upload **one or more** capital-gains/broker files (up to 10) and the **single** AIS
+statement. All are auto-detected with the same `detect.py` engine (sheet, header row,
+columns). Each broker/CG file is consumed automatically and aggregated on its own
+detected columns, then the per-security totals are **pooled across every file**
+(`reco.merge_aggregates`) so an account split across several files still nets against
+the one AIS line. For the **AIS file** you get a
 quick **confirm-columns** screen — a selector sits on top of each column with the
 real data shown beneath, so you can see and override which column is the sale
 value / ISIN / security name / quantity before matching (the auto-detected wiring
@@ -213,7 +230,10 @@ No tax logic — `reco.py` only sums and compares; the preparer judges every del
 
 - `compute.py` — the deterministic core, **zero I/O**. 23-Jul-2024 split,
   Section 55(2)(ac) nested grandfathering, holding-period month test, section
-  routing, rate labels. Every rule is here, one place to tweak.
+  routing, rate labels. Every rule is here, one place to tweak. STT applicability
+  by asset class lives here too (`STT_ASSET_TYPES`, `stt_default_for`,
+  `resolve_stt`) — the "listed equity suffers STT, unlisted does not" rule the map
+  screen's `auto` basis and the classify screen's per-row default both call.
 - `detect.py` — the auto-detection layer, **zero I/O**. The broker-header
   synonym table (`SYNONYMS`), sheet/header detection, greedy column auto-mapping,
   and the blank-column / forward-fill / divider-row handling. Add a new broker by
@@ -231,6 +251,8 @@ No tax logic — `reco.py` only sums and compares; the preparer judges every del
   (via `detect.extract_isin`), and `normalise_name` strips that inline ISIN plus the
   `EQUITY SHARES`/`UNITS`/`-EQ` noise so the name fallback still lands — the two changes
   that make AIS's verbose descriptions reconcile against a broker's terse names.
+  `merge_aggregates` pools the per-security totals of several broker/CG files into one
+  before the match, so multiple inputs reconcile against the single AIS statement.
   `writer_reco.py` renders the workbook. Tune the match tolerance in
   `reco.reconcile` (`tol_abs`, `tol_pct`); widen the name normaliser's drop-list in
   `reco._DROP_WORDS`.
@@ -271,7 +293,9 @@ No tax logic — `reco.py` only sums and compares; the preparer judges every del
 
 ## Known v1 boundaries
 
-- One source file per run (multi-source consolidation is the next iteration).
+- Multiple source files (up to 10) are consolidated in one run — each mapped and
+  declared on its own terms, then merged into a single classify/compute. The AIS
+  reconciliation likewise pools several broker files against one AIS statement.
 - Statements that carry a 31-Jan-2018 FMV but drop the lot-level acquisition
   date for old holdings (CAMS & Karvy/KFIN transaction sheets) can be computed
   with **grandfathering basis = FMV-based**: FMV-bearing lots are treated as

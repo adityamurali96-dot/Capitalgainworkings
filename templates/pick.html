@@ -1,21 +1,31 @@
 {% extends "base.html" %}{% block step %}2 · sheets & headers{% endblock %}
 {% block body %}
-<p class="note"><a href="{{url_for('home')}}">← main menu</a></p>
+<p class="note"><a href="{{url_for('cg_home')}}">← back to upload</a></p>
 <h2>Pick the sheet(s) and header row</h2>
-<p class="sub">{{filename}} — tick <b>every</b> sheet that holds gains. If the file
-splits short-term and long-term (or one sheet per account) across sheets, tick
-them all and they're combined into one run. <span class="pill trusted">recommended</span>
-sheets are pre-ticked; the green row is each sheet's detected header.</p>
+<p class="sub">For <b>each file</b>, tick every sheet that holds gains. If a file splits
+short-term and long-term (or one sheet per account) across sheets, tick them all and
+they're combined. <span class="pill trusted">recommended</span> sheets are pre-ticked;
+the green row is each sheet's detected header.{% if multi %} Different files may use
+different layouts — that's fine, each is mapped separately on the next screen.{% endif %}</p>
 <form action="{{url_for('pick')}}" method="post">
-{% for sn, rows in preview.items() %}
-{% set r = ranked.get(sn) %}
-{% set checked = autocheck.get(sn) %}
-{% set hdr = sheet_hdr.get(sn) %}
+{% for fb in file_blocks %}
+{% set fi = fb.fi %}
+{% if multi %}
+<h3 style="margin:18px 0 8px;border-bottom:2px solid var(--accent);padding-bottom:4px">
+  File {{loop.index}}: <span class="mono">{{fb.filename}}</span></h3>
+{% else %}
+<p class="note" style="margin-bottom:10px"><b>{{fb.filename}}</b></p>
+{% endif %}
+{% for sn in fb.sheets %}
+{% set rows = fb.preview[sn] %}
+{% set r = fb.ranked.get(sn) %}
+{% set checked = fb.autocheck.get(sn) %}
+{% set hdr = fb.sheet_hdr.get(sn) %}
 <div class="card" {% if checked %}style="border-color:var(--ok)"{% endif %}>
   <label class="fld" style="margin-bottom:6px">
-    <input type="checkbox" name="sheets" value="{{sn}}" style="width:auto" {% if checked %}checked{% endif %}>
+    <input type="checkbox" name="sheets_{{fi}}" value="{{sn}}" style="width:auto" {% if checked %}checked{% endif %}>
     <b style="display:inline">{{sn}}</b>
-    {% if sn==recommend %}<span class="pill trusted">recommended</span>{% endif %}
+    {% if sn==fb.recommend %}<span class="pill trusted">recommended</span>{% endif %}
     {% if r %}<span class="note">— {{r.reason}}</span>{% endif %}
   </label>
   <div class="scroll"><table>
@@ -23,7 +33,7 @@ sheets are pre-ticked; the green row is each sheet's detected header.</p>
     {% for row in rows %}
     {% set is_hdr = (hdr is not none and loop.index0==hdr) %}
     <tr {% if is_hdr %}style="background:#e6f4ea"{% endif %}>
-      <td><input type="radio" name="header_row_{{sn}}" value="{{loop.index0}}"
+      <td><input type="radio" name="header_row_{{fi}}_{{sn}}" value="{{loop.index0}}"
                  {% if is_hdr or (hdr is none and loop.index0==0) %}checked{% endif %}></td>
       {% for c in row %}<td>{{c[:24]}}</td>{% endfor %}
     </tr>
@@ -31,9 +41,10 @@ sheets are pre-ticked; the green row is each sheet's detected header.</p>
   </table></div>
 </div>
 {% endfor %}
+{% endfor %}
 <button class="btn" type="submit">Use these →</button>
 </form>
-<p class="note">Combined sheets must share the same column order (true for
-short-term/long-term or per-account splits from one broker). Each sheet keeps its
-own header row, so they can sit at different positions.</p>
+<p class="note">Sheets combined <b>within one file</b> must share the same column order
+(true for short-term/long-term or per-account splits from one broker). Each sheet keeps
+its own header row, so they can sit at different positions.</p>
 {% endblock %}

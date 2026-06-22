@@ -8,6 +8,8 @@
   <span class="pill proposed">proposed</span> name match — confirm &nbsp;
   <span class="pill manual">manual</span> set it yourself.
   50AA shows only for debt rows; the proposal is pre-filled from the acquisition date.
+  <b>STT</b> is auto-set from the asset class — listed equity / EOF / business trust = Yes,
+  unlisted / foreign / debt / VDA = No; override the genuine off-market exception per row.
 </p>
 {% if skipped %}<p class="note">Skipped {{skipped}} non-lot row(s) — section
 dividers, sub-totals or repeated headers — so they don't reach the engine as errors.</p>{% endif %}
@@ -24,7 +26,7 @@ dividers, sub-totals or repeated headers — so they don't reach the engine as e
     {% set ns = namespace(prev=None) %}
     {% for r in rows %}
     {% if multi_sheet and r.sheet != ns.prev %}
-    <tr class="sheetrow"><td colspan="8">Sheet: <b>{{ r.sheet }}</b></td></tr>
+    <tr class="sheetrow"><td colspan="8">Source: <b>{{ r.sheet }}</b></td></tr>
     {% set ns.prev = r.sheet %}
     {% endif %}
     <tr>

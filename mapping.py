@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 import detect
-from compute import Tx
+from compute import Tx, resolve_stt
 
 CANONICAL_FIELDS = [
     "security_name", "acquisition_date", "purchase_cost", "purchase_expenses",
@@ -106,7 +106,7 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
     row: one source record (header->value)
     mapping: {canonical_field: source_header}   (only mapped fields present)
     decl: per-source declarations:
-        cost_basis_meaning, default_asset_type, default_stt_paid (bool),
+        cost_basis_meaning, default_asset_type, stt_basis ('auto'|'yes'|'no'),
         default_is_50aa (bool), fmv_basis ('per_unit'|'total'), source_label
     classification: optional per-row override {asset_type, basis, confidence, is_50aa, stt_paid}
     Returns (Tx, error|None).
@@ -149,7 +149,13 @@ def build_tx(row: dict, mapping: dict, decl: dict, classification: dict | None =
 
     cls = classification or {}
     asset_type = cls.get("asset_type") or decl.get("default_asset_type")
-    stt = cls.get("stt_paid", decl.get("default_stt_paid", asset_type in ("equity", "eof", "business_trust")))
+    # STT: an explicit per-row choice (from the classify screen) wins; otherwise it
+    # is resolved from the per-source basis ("auto" derives it from the asset class —
+    # listed equity/EOF/business trust suffer STT, unlisted/foreign/debt/VDA do not).
+    if "stt_paid" in cls:
+        stt = cls["stt_paid"]
+    else:
+        stt = resolve_stt(decl.get("stt_basis", "auto"), asset_type)
     is_50aa = cls.get("is_50aa", decl.get("default_is_50aa", False))
 
     missing = []

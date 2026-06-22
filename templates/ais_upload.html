@@ -2,30 +2,33 @@
 {% block body %}
 <p class="note"><a href="{{url_for('home')}}">← main menu</a></p>
 <h2>AIS Reconciliation</h2>
-<p class="sub">Upload both files. Columns are auto-detected; you then get a quick
-screen to <b>confirm the AIS file's columns</b> (the broker/CG file is read
-automatically). Sale values are totalled per security and matched (ISIN first,
-then name).</p>
+<p class="sub">Upload your <b>capital-gains / broker file(s)</b> — one or more, up to
+{{max_files}} — and the <b>single AIS file</b>. Columns are auto-detected; you then get a
+quick screen to <b>confirm the AIS file's columns</b> (the broker/CG files are read
+automatically). Sale values are totalled per security <b>across every broker file</b> and
+matched against AIS (ISIN first, then name).</p>
 
 <div class="card">
   <form action="{{url_for('ais')}}" method="post" enctype="multipart/form-data">
-    <label class="fld"><b>Capital-gains / broker file</b>
-      <input type="file" name="cg_file" accept=".xlsx,.xls,.csv,.tsv" required>
+    <label class="fld"><b>Capital-gains / broker file(s)</b>
+      <input type="file" name="cg_files" accept=".xlsx,.xls,.csv,.tsv" multiple required>
       <span class="note">The same kind of statement you'd feed to Capital Gain Summary (Zerodha, Groww, CAMS, …).
+      Add every account / broker — their sale values are pooled per security before the match.
       <b>Best:</b> the <span class="mono">*_AIS_Input.xlsx</span> (Output D) the Capital Gain Summary
-      produces — it is already ISIN-keyed, so the match is cleanest.</span>
+      produces — it is already ISIN-keyed, so the match is cleanest. Hold ⌘ / Ctrl to pick several.</span>
     </label>
     <label class="fld"><b>AIS file</b>
       <input type="file" name="ais_file" accept=".xlsx,.xls,.csv,.tsv" required>
-      <span class="note">The AIS "Sale of securities and units of mutual fund" export (xlsx / xls / csv).</span>
+      <span class="note">The single AIS "Sale of securities and units of mutual fund" export (xlsx / xls / csv).</span>
     </label>
     <p style="margin-bottom:0"><button class="btn" type="submit">Reconcile →</button></p>
   </form>
 </div>
 
 <div class="disc">
-Reconciliation compares <b>sale value per security</b> on each side. A security
-with an ISIN on one side and only a name on the other is matched by normalised
-name. Quarters/lots are summed; the preparer judges every delta.
+Reconciliation compares <b>sale value per security</b> on each side. Several broker files
+are pooled per security (by ISIN, then name) first, so an account split across files still
+nets against the one AIS line. A security with an ISIN on one side and only a name on the
+other is matched by normalised name. Quarters/lots are summed; the preparer judges every delta.
 </div>
 {% endblock %}

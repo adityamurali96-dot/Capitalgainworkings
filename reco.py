@@ -99,6 +99,29 @@ def aggregate(rows: list[dict], name_col, isin_col, value_col, qty_col) -> dict[
     return out
 
 
+def merge_aggregates(parts: list[dict[str, "Side"]]) -> dict[str, Side]:
+    """Merge several per-security aggregates (one per source file) into one, summing
+    sale value / quantity / row-count per key. Used when several broker/CG files are
+    reconciled against a single AIS statement: each file is aggregated on its own
+    auto-detected columns, then the totals are folded together per security."""
+    out: dict[str, Side] = {}
+    for part in parts:
+        for k, s in part.items():
+            o = out.get(k)
+            if o is None:
+                out[k] = Side(key=s.key, kind=s.kind, name=s.name, isin=s.isin,
+                              value=s.value, qty=s.qty, n=s.n)
+            else:
+                o.value += s.value
+                o.qty += s.qty
+                o.n += s.n
+                if not o.name and s.name:
+                    o.name = s.name
+                if not o.isin and s.isin:
+                    o.isin = s.isin
+    return out
+
+
 @dataclass
 class Pair:
     """A security present on both sides."""
